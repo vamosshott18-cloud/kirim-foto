@@ -11,6 +11,7 @@ const mb = n => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : (n / 1048576).toFixed(
 const BAWAAN = {
   ukuran: "sisi", kompres: "mutu", sisi: 2500, perbesar: false, piksel_w: 3000, piksel_h: 2000, piksel_isi: "pas", piksel_putar: true,
   persen: 50, mb: 1.0, jpeg: 85, tujuan: ["drive"],
+  nama_folder: "{folder}",                      // nama folder/album tujuan, boleh pakai {folder} {tanggal} {bulan} {tahun} {no}
   drive_folder: null, drive_sub: true,          // folder Drive pilihan sendiri (null = otomatis Kirim Foto › nama folder)
   wm: { aktif: false, teks: "", logo: "", posisi: "kanan-bawah", ukuran: 20, opasitas: 70, nama_file: false, jam: false, isi: "regang", logo_portrait: "" },
   label: { aktif: false, teks: "{nama_baru}", posisi: "kiri-bawah", ukuran: 3.5, warna: "#ffffff", opasitas: 90, latar: "bayangan", tebal: true },
@@ -25,7 +26,7 @@ const simpanAtur = () => { try { localStorage.setItem("kf_atur", JSON.stringify(
 function set(jalur, v) {
   const k = jalur.split("."); let o = ATUR;
   for (let i = 0; i < k.length - 1; i++) o = o[k[i]];
-  o[k.at(-1)] = v; simpanAtur(); gambarAtur(); gambarTombol(); pratinjau();
+  o[k.at(-1)] = v; simpanAtur(); gambarAtur(); gambarTombol(); if (jalur === "nama_folder") gambarFolder(); pratinjau();
 }
 
 /* ---------------- penyimpanan pustaka (IndexedDB, di perangkat ini) ---------------- */
@@ -244,21 +245,21 @@ function gambarFolder() {
         <input type="checkbox" ${g.pilih ? "checked" : ""} onchange="GRUP.find(x=>x.id===${g.id}).pilih=this.checked;gambarFolder();gambarTombol();pratinjau()">
         ${thumbs(g)}
         <div class="exinfo"><input type="text" value="${esc(g.nama)}" onchange="GRUP.find(x=>x.id===${g.id}).nama=this.value.trim()||'Foto';gambarAtur();gambarTombol()" title="Nama folder/album tujuan — ketuk untuk ganti">
-          <div class="s">${g.file.length - nV} foto${nV ? ` · ${nV} video` : ""}${nSub ? ` · ${nSub} subfolder` : ""}</div></div>
+          <div class="s">${g.file.length - nV} foto${nV ? ` · ${nV} video` : ""}${nSub ? ` · ${nSub} subfolder` : ""}${namaFolderTujuan(g.nama, p.indexOf(g) + 1 || 1) !== g.nama ? ` · <span class="jadi">→ ${esc(namaFolderTujuan(g.nama, p.indexOf(g) + 1 || 1))}</span>` : ""}</div></div>
         <button class="hapus" title="Keluarkan dari daftar" onclick="buangGrup(${g.id})">✕</button></div>`;
     }
     const pct = g.total ? (g.ok + g.gagal) / g.total * 100 : 0;
     const chip = g.status === "jalan" ? (g.ulang ? `<span class="chip ulang">Masalah, diulang</span>` : `<span class="chip jalan">Memproses</span>`)
       : g.gagal ? `<span class="chip gagal">Selesai, ${g.gagal} gagal</span>` : `<span class="chip ok">Selesai ✓</span>`;
     return `<div class="exrow proses">${thumbs(g)}
-      <div class="exinfo"><div class="atas"><b>${esc(g.nama)}</b>${chip}<span class="s">${g.ok}/${g.total}</span></div>
+      <div class="exinfo"><div class="atas"><b>${esc(namaTj(g))}</b>${chip}<span class="s">${g.ok}/${g.total}</span></div>
         <div class="kemajuan"><b style="width:${pct}%;${g.gagal || g.ulang ? "background:var(--warn)" : ""}"></b></div>
         ${g.galat && (g.gagal || g.ulang) ? `<div style="font-size:12px;color:var(--bad);margin-top:4px">${esc(g.galat)}</div>` : ""}
         <div class="tb">
           ${g.link.drive ? `<a class="kecil" href="https://drive.google.com/drive/folders/${g.link.drive}" target="_blank" rel="noopener">📁 Buka Drive</a>
             <button class="kecil" onclick="bagikan(${g.id})">🔗 ${g.link.share ? "Salin link lagi" : "Bagikan link"}</button>` : ""}
           ${g.link.photos ? `<a class="kecil" href="${esc(g.link.photos)}" target="_blank" rel="noopener">🖼 Buka album</a>` : ""}
-          ${g.link.zip ? `<a class="kecil" href="${g.link.zip}" download="${esc(g.nama)}.zip">⬇ Unduh ZIP lagi</a>` : ""}
+          ${g.link.zip ? `<a class="kecil" href="${g.link.zip}" download="${esc(namaTj(g))}.zip">⬇ Unduh ZIP lagi</a>` : ""}
           ${g.status === "selesai" && g.gagalTugas.length ? `<button class="kecil" onclick="ulangGagal(${g.id})">Ulangi yang gagal</button>` : ""}</div></div>
       ${g.status === "selesai" ? `<button class="hapus" title="Hapus dari daftar" onclick="buangGrup(${g.id})">✕</button>` : ""}</div>`;
   }).join("");
@@ -302,6 +303,18 @@ function ringkasAtur() {
     label: lb.aktif ? ((lb.teks || "").split("\n")[0] || "(kosong)") : "Mati",
     lut: a.lut.file ? `${namaPk("preset", a.lut.file) || "Preset"} · ${a.lut.kekuatan}%` : "Tanpa preset",
   };
+}
+const BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+function namaFolderTujuan(nama, no = 1, a = ATUR) {
+  const d = new Date(), dd = String(d.getDate()).padStart(2, "0"), mm = String(d.getMonth() + 1).padStart(2, "0");
+  const s = (a.nama_folder || "{folder}").replace(/\{(\w+)\}/g, (m, k) => ({ folder: nama, tanggal: `${dd}-${mm}-${d.getFullYear()}`,
+    bulan: BULAN[d.getMonth()], tahun: String(d.getFullYear()), no: String(no) })[k] ?? m);
+  return s.replace(/[\\/:*?"<>|]+/g, "-").replace(/\s+/g, " ").trim() || nama;
+}
+const namaTj = g => g.namaTujuan || g.nama;
+function sisipFolder(k) {
+  const el = $("#namaFolder"), t = el ? el.value : (ATUR.nama_folder || ""), a = el ? el.selectionStart : t.length, b = el ? el.selectionEnd : t.length;
+  set("nama_folder", t.slice(0, a) + "{" + k + "}" + t.slice(b));
 }
 function gambarAtur() {
   if (MODE !== "ekspor" || !$("#aturBlok")) return;
@@ -411,7 +424,7 @@ function gambarProfil() {
 function pakaiProfil(id) {
   const p = PROFIL.find(x => x.id === id); if (!p) return;
   ATUR = gabung(BAWAAN, p.atur); PROFIL_AKTIF = id; simpanAtur(); simpanProfil();
-  gambarAtur(); gambarTombol(); pratinjau(); toast(`Profil “${p.nama}” dipakai`);
+  gambarAtur(); gambarTombol(); gambarFolder(); pratinjau(); toast(`Profil “${p.nama}” dipakai`);
 }
 function simpanSebagaiProfil() {
   const n = prompt("Nama profil (mis. Klien Drive 2 MB, IG 1080):", ""); if (!n || !n.trim()) return;
@@ -441,8 +454,14 @@ function gambarTujuan() {
     <div class="blok" style="margin-bottom:0">
     <div class="pilihan">${[["drive", "📁 Google Drive"], ["photos", "🖼 Google Photos"], ["lokal", Lokal.bisaFolder() ? "📂 Folder di komputer" : "⬇ Unduh ke perangkat"]].map(([k, t]) =>
       `<button class="${pakai(k) ? "on" : ""}" style="flex:1 1 30%" onclick="pilihTujuan('${k}')">${pakai(k) ? "✓ " : ""}${t}</button>`).join("")}</div>
+    <div class="nfolder"><span>Nama folder tujuan</span>
+      <input type="text" id="namaFolder" value="${esc(ATUR.nama_folder || "{folder}")}" onchange="set('nama_folder',this.value.trim()||'{folder}')" placeholder="{folder}">
+      <div class="dua" style="flex-wrap:wrap;gap:5px;margin-top:6px">${[["folder", "nama di daftar"], ["tanggal", "tgl export"], ["bulan", "nama bulan"], ["tahun", "tahun"], ["no", "urutan folder"]].map(([k, j]) =>
+        `<button class="kecil" title="${j}" onmousedown="event.preventDefault()" onclick="sisipFolder('${k}')">{${k}}</button>`).join("")}
+        ${(ATUR.nama_folder || "{folder}") !== "{folder}" ? `<button class="kecil" onclick="set('nama_folder','{folder}')">↺ Sama dengan daftar</button>` : ""}</div>
+      <div class="ket" style="margin-top:6px">Contoh: <b style="color:var(--teal2)">${esc(namaFolderTujuan((terpilih()[0] || {}).nama || "Fun Run Sesi Pagi"))}</b>. Nama di daftar foto tetap bisa diganti satu per satu.</div></div>
     ${pakai("drive") ? blokFolderDrive() : ""}
-    ${pakai("photos") ? `<div class="ket" style="margin-top:10px">Google Photos: satu album per folder, namanya sama dengan nama folder.</div>` : ""}
+    ${pakai("photos") ? `<div class="ket" style="margin-top:10px">Google Photos: satu album per folder, namanya sama dengan nama folder tujuan.</div>` : ""}
     ${pakai("lokal") ? `<div class="ket" style="margin-top:10px">${Lokal.bisaFolder() ? "Saat Export kamu memilih folder tujuan di komputer; subfolder ikut dibuat." : "Hasil tiap folder diunduh sebagai file ZIP (di iPhone masuk ke app Files). Untuk ratusan foto resolusi penuh, lebih aman pakai Google Drive."}</div>` : ""}
     ${peringatan}</div>`;
 }
@@ -460,7 +479,7 @@ function gambarBar() {
 let UBAH_DF = false;
 function blokFolderDrive() {
   const f = ATUR.drive_folder, g = terpilih()[0] || { nama: "Nama Folder" };
-  const contoh = f ? (ATUR.drive_sub ? `${f.nama} › ${g.nama}` : f.nama) : `Kirim Foto › ${g.nama}`;
+  const nf = namaFolderTujuan(g.nama), contoh = f ? (ATUR.drive_sub ? `${f.nama} › ${nf}` : f.nama) : `Kirim Foto › ${nf}`;
   return `<div class="dfolder">
     <div class="dua"><span style="flex:1;min-width:0">Masuk ke <b style="color:var(--teal2)">${esc(contoh)}</b>${f ? ` · <a href="https://drive.google.com/drive/folders/${f.id}" target="_blank" rel="noopener">buka</a>` : ""}</span>
       <button class="kecil" onclick="UBAH_DF=!UBAH_DF;gambarTujuan()">${UBAH_DF ? "Tutup" : "Ganti folder"}</button></div>
@@ -553,7 +572,8 @@ async function mulaiEkspor() {
   const a = salin(ATUR), as = await muatAset(a);
   JALAN = true; kunciLayar();
   const tugas = [];
-  for (const g of p) {
+  for (const [i, g] of p.entries()) {
+    g.namaTujuan = namaFolderTujuan(g.nama, i + 1, a);
     g.file.sort((x, y) => urutAlami((x.rel || "") + "/" + x.f.name, (y.rel || "") + "/" + y.f.name));
     Object.assign(g, { status: "jalan", ok: 0, gagal: 0, total: g.file.length, galat: "", link: {}, gagalTugas: [], tujuan: tj, mulai: Date.now() });
     g.file.forEach((item, i) => tugas.push({ g, item, x: i + 1 }));
@@ -592,15 +612,15 @@ async function kerjakan(t, a, as) {
           await tungguOnline();
           if (tj === "drive") {
             const df = a.drive_folder, akar = df ? df.id : "root";
-            const dasar = df ? (a.drive_sub ? [g.nama] : []) : ["Kirim Foto", g.nama];
+            const dasar = df ? (a.drive_sub ? [namaTj(g)] : []) : ["Kirim Foto", namaTj(g)];
             const induk = await Google.jalurDrive([...dasar, ...bagian], akar);
             if (!g.link.drive) g.link.drive = dasar.length ? await Google.jalurDrive(dasar, akar) : akar;
             await Google.unggahDrive(blob, nama, mime, induk, () => {});
           } else if (tj === "photos") {
-            const al = await Google.album(bagian.length ? [g.nama, ...bagian].join(" – ") : g.nama);
-            if (!bagian.length) g.link.photos = al.url; else if (!g.link.photos) g.link.photos = (await Google.album(g.nama)).url;
+            const al = await Google.album(bagian.length ? [namaTj(g), ...bagian].join(" – ") : namaTj(g));
+            if (!bagian.length) g.link.photos = al.url; else if (!g.link.photos) g.link.photos = (await Google.album(namaTj(g))).url;
             await Google.unggahPhotos(blob, nama, mime, al.id, () => {});
-          } else if (Lokal.adaFolder) await Lokal.tulis([g.nama, ...bagian], nama, blob);
+          } else if (Lokal.adaFolder) await Lokal.tulis([namaTj(g), ...bagian], nama, blob);
           else await Lokal.tambahZip(g.id, [...bagian, nama].join("/"), blob);
           break;
         } catch (e) {
@@ -613,7 +633,7 @@ async function kerjakan(t, a, as) {
     g.ok++; g.ulang = false;
   } catch (e) {
     g.gagal++; g.galat = e.message; g.gagalTugas.push(t);
-    if (g.gagal === 1 || g.gagal % 20 === 0) kabari("masalah", `⚠️ Masalah di ${g.nama}`, e.message);
+    if (g.gagal === 1 || g.gagal % 20 === 0) kabari("masalah", `⚠️ Masalah di ${namaTj(g)}`, e.message);
   }
   if (g.ok + g.gagal === g.total) await folderSelesai(g);
   jadwalProses();
@@ -621,10 +641,10 @@ async function kerjakan(t, a, as) {
 async function folderSelesai(g) {
   g.status = "selesai"; g.baruSelesai = true;
   if (g.tujuan.includes("lokal") && !Lokal.adaFolder) {
-    try { const z = await Lokal.unduhZip(g.id, g.nama); if (z) g.link.zip = z.url; } catch (e) { g.galat = "ZIP gagal dibuat (memori perangkat penuh?)"; }
+    try { const z = await Lokal.unduhZip(g.id, namaTj(g)); if (z) g.link.zip = z.url; } catch (e) { g.galat = "ZIP gagal dibuat (memori perangkat penuh?)"; }
   }
   const ke = g.tujuan.map(t => ({ drive: "Google Drive", photos: "Google Photos", lokal: Lokal.adaFolder ? "folder" : "ZIP" })[t]).join(" + ");
-  kabari(g.gagal ? "masalah" : "ok", `${g.gagal ? "⚠️" : "✅"} ${g.nama} selesai`, `${g.ok} file masuk ${ke}${g.gagal ? `, ${g.gagal} gagal` : ""}`);
+  kabari(g.gagal ? "masalah" : "ok", `${g.gagal ? "⚠️" : "✅"} ${namaTj(g)} selesai`, `${g.ok} file masuk ${ke}${g.gagal ? `, ${g.gagal} gagal` : ""}`);
 }
 async function ulangGagal(id) {
   const g = GRUP.find(x => x.id === id); if (!g || JALAN || !g.gagalTugas.length) return;
@@ -639,7 +659,7 @@ async function bagikan(id) {
   try {
     if (!Google.aktif()) return masukGoogle();
     const link = g.link.share || (g.link.share = await Google.bagikanDrive(g.link.drive));
-    if (navigator.share && MOBILE) await navigator.share({ title: g.nama, url: link }).catch(() => {});
+    if (navigator.share && MOBILE) await navigator.share({ title: namaTj(g), url: link }).catch(() => {});
     else { await navigator.clipboard.writeText(link); toast("Link folder disalin ✓ (siapa pun dengan link bisa melihat)"); }
     gambarProses();
   } catch (e) { alert(e.message); }
