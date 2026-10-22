@@ -176,17 +176,17 @@ const Google = (() => {
     if (cacheFolder.has(k)) return cacheFolder.get(k);
     const p = (async () => {
       const q = `name='${kutip(nama)}' and '${induk}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`;
-      const j = await (await req(`${API}/files?fields=files(id)&q=${encodeURIComponent(q)}`)).json();
+      const j = await (await req(`${API}/files?fields=files(id)&supportsAllDrives=true&includeItemsFromAllDrives=true&q=${encodeURIComponent(q)}`)).json();
       if (j.files.length) return j.files[0].id;
-      const r = await req(`${API}/files?fields=id`, { method: "POST", headers: { "Content-Type": "application/json" },
+      const r = await req(`${API}/files?fields=id&supportsAllDrives=true`, { method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: nama, mimeType: "application/vnd.google-apps.folder", parents: [induk] }) });
       return (await r.json()).id;
     })();
     cacheFolder.set(k, p);
     try { return await p; } catch (e) { cacheFolder.delete(k); throw e; }
   }
-  async function jalurDrive(bagian) {          // ["Kirim Foto", "Nama folder", "Sesi 1"] → id folder terakhir
-    let id = "root";
+  async function jalurDrive(bagian, akar = "root") {   // ["Kirim Foto", "Nama folder", "Sesi 1"] → id folder terakhir
+    let id = akar;
     for (const b of bagian.filter(Boolean)) id = await folderDrive(b, id);
     return id;
   }
@@ -195,10 +195,10 @@ const Google = (() => {
       const fd = new FormData();
       fd.append("metadata", new Blob([JSON.stringify({ name: nama, parents: [induk] })], { type: "application/json" }));
       fd.append("file", blob.type ? blob : new Blob([blob], { type: mime }));
-      const r = await req(`${UP}/files?uploadType=multipart&fields=id`, { method: "POST", body: fd });
+      const r = await req(`${UP}/files?uploadType=multipart&fields=id&supportsAllDrives=true`, { method: "POST", body: fd });
       maju(blob.size); return (await r.json()).id;
     }
-    const r0 = await req(`${UP}/files?uploadType=resumable&fields=id`, { method: "POST",
+    const r0 = await req(`${UP}/files?uploadType=resumable&fields=id&supportsAllDrives=true`, { method: "POST",
       headers: { "Content-Type": "application/json", "X-Upload-Content-Type": mime, "X-Upload-Content-Length": String(blob.size) },
       body: JSON.stringify({ name: nama, parents: [induk] }) });
     const sesi = r0.headers.get("Location"), POTONG = 8 * 1048576;
@@ -222,9 +222,34 @@ const Google = (() => {
     }
   }
   async function bagikanDrive(id) {
-    await req(`${API}/files/${id}/permissions`, { method: "POST", headers: { "Content-Type": "application/json" },
+    await req(`${API}/files/${id}/permissions?supportsAllDrives=true`, { method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ role: "reader", type: "anyone" }) });
     return `https://drive.google.com/drive/folders/${id}?usp=sharing`;
+  }
+
+  /* ---- pilih folder Drive yang sudah ada (Google Picker): memberi izin ke folder itu saja ---- */
+  let gapiSiap = null;
+  const idDariLink = t => { t = (t || "").trim(); const m = t.match(/folders\/([\w-]{10,})/) || t.match(/[?&]id=([\w-]{10,})/) || t.match(/^([\w-]{20,})$/); return m ? m[1] : null; };
+  async function pilihFolder(link = "") {
+    if (!aktif()) { if (sesi()) await segar(); else throw new GalatIzin("Masuk Google dulu"); }
+    gapiSiap = gapiSiap || new Promise((ok, gagal) => { const s = document.createElement("script"); s.src = "https://apis.google.com/js/api.js";
+      s.onload = () => gapi.load("picker", { callback: ok, onerror: gagal }); s.onerror = () => gagal(new Error("Tidak bisa memuat pemilih Google Drive")); document.head.appendChild(s); });
+    await gapiSiap;
+    const fileId = idDariLink(link);
+    if (link && !fileId) throw new Error("Link folder tidak dikenali. Salin link dari Drive: klik kanan folder → Bagikan → Salin link.");
+    return new Promise((ok, batal) => {
+      const P = google.picker;
+      const lihat = new P.DocsView(P.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setMimeTypes("application/vnd.google-apps.folder");
+      if (fileId) lihat.setFileIds(fileId);                       // dari link: tampilkan folder itu saja → tinggal Select
+      const b = new P.PickerBuilder().setDeveloperKey(KIRIM_CONFIG.apiKey).setAppId(KIRIM_CONFIG.appId).setOAuthToken(token)
+        .addView(lihat).enableFeature(P.Feature.SUPPORT_DRIVES).setTitle(fileId ? "Ketuk folder lalu Select" : "Pilih folder tujuan export")
+        .setCallback(d => {
+          if (d.action === P.Action.PICKED) { const x = d.docs[0]; ok({ id: x.id, nama: x.name }); }
+          else if (d.action === P.Action.CANCEL) ok(null);
+        });
+      if (!fileId) b.addView(new P.DocsView(P.ViewId.FOLDERS).setIncludeFolders(true).setSelectFolderEnabled(true).setEnableDrives(true));
+      b.build().setVisible(true);
+    });
   }
 
   /* ---- Google Photos (album dibuat otomatis) ---- */
@@ -250,7 +275,7 @@ const Google = (() => {
   }
 
   const ingatAkun = () => localStorage.getItem("kf_email");
-  return { segar, punyaSesi: () => !!(LAYANAN && sesi()), LAYANAN, ingatAkun, masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
+  return { pilihFolder, idDariLink, segar, punyaSesi: () => !!(LAYANAN && sesi()), LAYANAN, ingatAkun, masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
 })();
 
 /* ---- Folder di perangkat: tulis langsung (Chrome/Edge di komputer) atau ZIP (lainnya) ---- */

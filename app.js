@@ -11,6 +11,7 @@ const mb = n => n >= 1e9 ? (n / 1e9).toFixed(1) + " GB" : (n / 1048576).toFixed(
 const BAWAAN = {
   ukuran: "sisi", kompres: "mutu", sisi: 2500, perbesar: false, piksel_w: 3000, piksel_h: 2000, piksel_isi: "pas", piksel_putar: true,
   persen: 50, mb: 1.0, jpeg: 85, tujuan: ["drive"],
+  drive_folder: null, drive_sub: true,          // folder Drive pilihan sendiri (null = otomatis Kirim Foto › nama folder)
   wm: { aktif: false, teks: "", logo: "", posisi: "kanan-bawah", ukuran: 20, opasitas: 70, nama_file: false, jam: false, isi: "regang", logo_portrait: "" },
   label: { aktif: false, teks: "{nama_baru}", posisi: "kiri-bawah", ukuran: 3.5, warna: "#ffffff", opasitas: 90, latar: "bayangan", tebal: true },
   lut: { file: "", kekuatan: 100 },
@@ -121,12 +122,34 @@ function tambahKeGrup(nama, daftar) {
   toast(`${file.length} file masuk ke "${nama}"` + (lewat ? ` · ${lewat} file lain dilewati` : ""));
   gambarFolder(); gambarTombol(); pratinjau();
 }
+const namaBawaan = () => "Foto " + new Date().toLocaleDateString("id-ID");
 async function tambahFoto() {
   const files = await pilihBerkas("#fFoto");
   if (!files.length) return;
-  const nama = prompt("Nama folder (jadi nama folder/album tujuan):", "Foto " + new Date().toLocaleDateString("id-ID"));
-  if (nama === null) return;
-  tambahKeGrup(nama.trim() || "Foto", files.map(f => ({ f, rel: "" })));
+  tambahKeGrup(namaBawaan(), files.map(f => ({ f, rel: "" })));        // nama bisa diganti langsung di daftar
+}
+// seret folder/foto dari Finder/Explorer ke kotak Foto
+async function isiFolder(dir, jalur = []) {
+  const r = dir.createReader(), semua = [];
+  for (;;) { const b = await new Promise((ok, no) => r.readEntries(ok, no)); if (!b.length) break; semua.push(...b); }
+  const hasil = [];
+  for (const e of semua) {
+    if (/^[._]/.test(e.name)) continue;                                  // lewati file/folder tersembunyi & diawali "_"
+    if (e.isDirectory) hasil.push(...await isiFolder(e, [...jalur, e.name]));
+    else hasil.push({ f: await new Promise((ok, no) => e.file(ok, no)), rel: jalur.join("/") });
+  }
+  return hasil;
+}
+async function terimaSeret(ev) {
+  ev.preventDefault(); $("#kolFoto")?.classList.remove("seret");
+  const entri = [...(ev.dataTransfer.items || [])].map(i => i.webkitGetAsEntry && i.webkitGetAsEntry()).filter(Boolean);
+  if (!entri.length) { const fs = [...(ev.dataTransfer.files || [])]; if (fs.length) tambahKeGrup(namaBawaan(), fs.map(f => ({ f, rel: "" }))); return; }
+  const lepas = [];
+  for (const e of entri) {
+    if (e.isDirectory) tambahKeGrup(e.name, await isiFolder(e));
+    else lepas.push({ f: await new Promise((ok, no) => e.file(ok, no)), rel: "" });
+  }
+  if (lepas.length) tambahKeGrup(namaBawaan(), lepas);
 }
 async function tambahFolder() {
   const files = await pilihBerkas("#fFolder");
@@ -196,34 +219,56 @@ function halaman(m) {
 }
 function gambarEkspor() {
   $("#utama").innerHTML = `
-  <div class="kepala"><h2>📤 Export</h2><div class="sub">① Masukkan foto &nbsp;② Atur preset, watermark, ukuran &nbsp;③ Pilih tujuan lalu tekan Export. Semua diolah di perangkat ini.</div></div>
-  <div class="tata">
-    <div id="kolA"><div class="blok"><h3>① Foto <span id="exJml" style="font-weight:400;color:var(--mute);font-size:12px"></span></h3>
-      <div class="dua" style="flex-wrap:wrap">
-        <button class="utama" onclick="tambahFoto()">＋ Pilih foto</button>
-        ${MOBILE ? "" : `<button onclick="tambahFolder()">📁 Pilih folder</button>`}</div>
-      <div id="exFolder"></div></div></div>
+  <div class="tata2">
+    <div id="kolFoto" ondragover="event.preventDefault();this.classList.add('seret')" ondragleave="if(!this.contains(event.relatedTarget))this.classList.remove('seret')" ondrop="terimaSeret(event)">
+      <div class="judul">Foto <small id="exJml"></small></div><div id="exFolder"></div></div>
     <div id="kolP"><div class="pratinjau" id="prev"><div class="kosong">Pratinjau muncul setelah ada foto.</div></div></div>
-    <div id="kolB"><div id="aturBlok"></div><div class="blok" id="exTombol"></div>
-      <div class="blok"><h3>Proses export</h3><div id="exProses"></div></div></div>
-  </div>`;
-  gambarFolder(); gambarAtur(); gambarTombol(); gambarProses(); PREV_KUNCI = null; pratinjau();
+    <div id="exProfil"></div>
+    <div id="aturBlok"></div>
+    <div id="exTujuan"></div>
+  </div>
+  <div class="bar" id="exBar"></div>`;
+  gambarFolder(); gambarAtur(); gambarTombol(); PREV_KUNCI = null; pratinjau();
 }
+const thumbs = g => `<div class="exthumbs">${g.file.filter(x => FOTO.test(x.f.name)).slice(0, 3).map(x => Mesin.adalahHeic(x.f) ? "<span>🖼</span>" : `<img src="${urlKecil(x.f)}" alt="" loading="lazy">`).join("")}</div>`;
 function gambarFolder() {
-  if (MODE !== "ekspor") return;
-  const daftar = GRUP.filter(g => g.status === "siap");
-  $("#exFolder").innerHTML = daftar.length ? daftar.map(g => {
-    const contoh = g.file.filter(x => FOTO.test(x.f.name)).slice(0, 3);
-    const nV = g.file.filter(x => VIDEO.test(x.f.name)).length;
-    return `<div class="exrow ${g.pilih ? "" : "mati2"}">
-      <input type="checkbox" ${g.pilih ? "checked" : ""} onchange="GRUP.find(x=>x.id===${g.id}).pilih=this.checked;gambarFolder();gambarTombol();pratinjau()">
-      <div class="exthumbs">${contoh.map(x => Mesin.adalahHeic(x.f) ? "<span>🖼</span>" : `<img src="${urlKecil(x.f)}" alt="" loading="lazy">`).join("")}</div>
-      <div class="exinfo"><input type="text" value="${esc(g.nama)}" onchange="GRUP.find(x=>x.id===${g.id}).nama=this.value.trim()||'Foto';gambarAtur()" title="Nama folder/album tujuan">
-        <div class="s">${g.file.length - nV} foto${nV ? ` · ${nV} video` : ""}${new Set(g.file.map(x => x.rel).filter(Boolean)).size ? ` · ${new Set(g.file.map(x => x.rel).filter(Boolean)).size} subfolder` : ""}</div></div>
-      <button class="hapus" title="Keluarkan dari daftar" onclick="buangGrup(${g.id})">✕</button></div>`;
-  }).join("") : `<div style="color:var(--mute);margin-top:10px;font-size:13px">Belum ada foto. Tekan <b>Pilih foto</b>${MOBILE ? " (dari galeri / Files)" : " atau <b>Pilih folder</b>"}. Bisa ditambah beberapa kali — tiap pilihan jadi satu folder tujuan.</div>`;
-  const p = terpilih();
-  $("#exJml").textContent = daftar.length ? `${p.length} dari ${daftar.length} folder dipilih` : "";
+  if (MODE !== "ekspor" || !$("#exFolder")) return;
+  const el = $("#exFolder"), fokus = document.activeElement;
+  if (el.contains(fokus) && fokus.type === "text") { jadwalProses(); return; }   // jangan ganggu yang sedang mengetik nama
+  const siap = GRUP.filter(g => g.status === "siap"), p = terpilih();
+  const izin = TUNGGU_IZIN ? `<div class="pesan warn" style="margin-top:0">Sesi Google habis, export dijeda. <button class="kecil utama" onclick="masukGoogle(false)">Sambung Google lagi</button></div>` : "";
+  const baris = GRUP.map(g => {
+    if (g.status === "siap") {
+      const nV = g.file.filter(x => VIDEO.test(x.f.name)).length, nSub = new Set(g.file.map(x => x.rel).filter(Boolean)).size;
+      return `<div class="exrow ${g.pilih ? "" : "mati2"}">
+        <input type="checkbox" ${g.pilih ? "checked" : ""} onchange="GRUP.find(x=>x.id===${g.id}).pilih=this.checked;gambarFolder();gambarTombol();pratinjau()">
+        ${thumbs(g)}
+        <div class="exinfo"><input type="text" value="${esc(g.nama)}" onchange="GRUP.find(x=>x.id===${g.id}).nama=this.value.trim()||'Foto';gambarAtur();gambarTombol()" title="Nama folder/album tujuan — ketuk untuk ganti">
+          <div class="s">${g.file.length - nV} foto${nV ? ` · ${nV} video` : ""}${nSub ? ` · ${nSub} subfolder` : ""}</div></div>
+        <button class="hapus" title="Keluarkan dari daftar" onclick="buangGrup(${g.id})">✕</button></div>`;
+    }
+    const pct = g.total ? (g.ok + g.gagal) / g.total * 100 : 0;
+    const chip = g.status === "jalan" ? (g.ulang ? `<span class="chip ulang">Masalah, diulang</span>` : `<span class="chip jalan">Memproses</span>`)
+      : g.gagal ? `<span class="chip gagal">Selesai, ${g.gagal} gagal</span>` : `<span class="chip ok">Selesai ✓</span>`;
+    return `<div class="exrow proses">${thumbs(g)}
+      <div class="exinfo"><div class="atas"><b>${esc(g.nama)}</b>${chip}<span class="s">${g.ok}/${g.total}</span></div>
+        <div class="kemajuan"><b style="width:${pct}%;${g.gagal || g.ulang ? "background:var(--warn)" : ""}"></b></div>
+        ${g.galat && (g.gagal || g.ulang) ? `<div style="font-size:12px;color:var(--bad);margin-top:4px">${esc(g.galat)}</div>` : ""}
+        <div class="tb">
+          ${g.link.drive ? `<a class="kecil" href="https://drive.google.com/drive/folders/${g.link.drive}" target="_blank" rel="noopener">📁 Buka Drive</a>
+            <button class="kecil" onclick="bagikan(${g.id})">🔗 ${g.link.share ? "Salin link lagi" : "Bagikan link"}</button>` : ""}
+          ${g.link.photos ? `<a class="kecil" href="${esc(g.link.photos)}" target="_blank" rel="noopener">🖼 Buka album</a>` : ""}
+          ${g.link.zip ? `<a class="kecil" href="${g.link.zip}" download="${esc(g.nama)}.zip">⬇ Unduh ZIP lagi</a>` : ""}
+          ${g.status === "selesai" && g.gagalTugas.length ? `<button class="kecil" onclick="ulangGagal(${g.id})">Ulangi yang gagal</button>` : ""}</div></div>
+      ${g.status === "selesai" ? `<button class="hapus" title="Hapus dari daftar" onclick="buangGrup(${g.id})">✕</button>` : ""}</div>`;
+  }).join("");
+  const tombol = `<button class="${GRUP.length ? "kecil" : "utama"}" onclick="event.stopPropagation();tambahFoto()">＋ ${GRUP.length ? "Foto" : "Pilih foto"}</button>${MOBILE ? "" : `<button class="${GRUP.length ? "kecil" : ""}" onclick="event.stopPropagation();tambahFolder()">📁 ${GRUP.length ? "Folder" : "Pilih folder"}</button>`}`;
+  el.innerHTML = izin + (GRUP.length ? baris + `<div class="zona kecil-z">${MOBILE ? "Tambah lagi:" : "Seret ke sini atau"} ${tombol}</div>`
+    : `<div class="zona besar-z" onclick="tambahFoto()"><div class="zi">⇪</div>
+        <b>${MOBILE ? "Pilih foto yang mau dikirim" : "Seret folder atau foto ke sini"}</b>
+        <span>${MOBILE ? "dari galeri atau Files" : "tiap folder jadi satu folder tujuan · JPG, PNG, HEIC, WEBP, MP4, MOV"}</span>
+        <div class="dua" style="justify-content:center;margin-top:14px;flex-wrap:wrap">${tombol}</div></div>`);
+  $("#exJml").textContent = siap.length ? `${p.length} dari ${siap.length} folder siap dikirim` : "";
 }
 const _url = new WeakMap();
 function urlKecil(f) { if (!_url.has(f)) _url.set(f, URL.createObjectURL(f)); return _url.get(f); }
@@ -242,111 +287,199 @@ function contohNama(x) {
   else if (n.mode === "baru") s += " " + x;
   return { s, y };
 }
+let BUKA = "";                                    // bagian "Atur hasil" yang sedang terbuka (satu saja)
+function bukaBagian(k) { BUKA = BUKA === k ? "" : k; gambarAtur(); }
+const namaPk = (jenis, id) => (P[jenis].find(x => x.id === id) || {}).nama;
+const BAGIAN = [["ukuran", "📐", "Ukuran"], ["kualitas", "🗜", "Kualitas"], ["nama", "🏷", "Nama file"], ["wm", "💧", "Watermark logo"], ["label", "🔤", "Teks di foto"], ["lut", "🎨", "Preset warna"]];
+function ringkasAtur() {
+  const a = ATUR, w = a.wm, lb = a.label;
+  const posWm = w.posisi === "penuh" ? "pas ukuran foto" : w.posisi === "ulang" ? "berulang miring" : (NPOS[w.posisi] || "").replace(/^\S+ /, "").toLowerCase();
+  return {
+    ukuran: { asli: "Asli", sisi: `Sisi terpanjang ${a.sisi} px${a.perbesar ? " · perbesar" : ""}`, piksel: `${a.piksel_w}×${a.piksel_h} px`, persen: `${a.persen}%` }[a.ukuran],
+    kualitas: { mutu: `JPEG ${a.jpeg}`, mb: `Maks ${a.mb} MB per foto`, asli: "Tanpa kompres ulang" }[a.kompres],
+    nama: contohNama(1).s + ".jpg",
+    wm: w.aktif ? `${namaPk("watermark", w.logo) || (w.teks ? "“" + w.teks + "”" : "Teks")} · ${posWm}` : "Mati",
+    label: lb.aktif ? ((lb.teks || "").split("\n")[0] || "(kosong)") : "Mati",
+    lut: a.lut.file ? `${namaPk("preset", a.lut.file) || "Preset"} · ${a.lut.kekuatan}%` : "Tanpa preset",
+  };
+}
 function gambarAtur() {
   if (MODE !== "ekspor" || !$("#aturBlok")) return;
-  const a = ATUR, w = a.wm, lb = a.label, n = a.nama;
-  const contohLb = (lb.teks || "").replace(/\{(\w+)\}/g, (m, k) => ({ nama_baru: contohNama(12).s, nama_file: "IMG_0012", no: "12", total: String(contohNama(12).y),
+  const a = ATUR, w = a.wm, lb = a.label, n = a.nama, r = ringkasAtur();
+  const contohLb = () => (lb.teks || "").replace(/\{(\w+)\}/g, (m, k) => ({ nama_baru: contohNama(12).s, nama_file: "IMG_0012", no: "12", total: String(contohNama(12).y),
     folder: (terpilih()[0] || {}).nama || "Nama Folder", subfolder: "Sesi 1", tanggal: "19/10/2026", jam: "07:42" })[k] ?? m);
-  $("#aturBlok").innerHTML = `
-  <div style="font-size:13px;font-weight:700;margin:4px 2px 8px">② Atur hasil <span style="font-weight:400;color:var(--mute);font-size:12px">berlaku untuk semua folder yang dicentang</span></div>
-  <div class="blok"><h3>📐 Ukuran (resolusi)</h3>
-    ${pilihan("ukuran", a.ukuran, [["asli", "Asli"], ["sisi", "Sisi px"], ["piksel", "Lebar×tinggi"], ["persen", "Persen %"]])}
-    ${a.ukuran === "asli" ? `<div style="font-size:12px;color:var(--mute)">Resolusi tidak diubah.</div>` : ""}
-    ${a.ukuran === "sisi" ? `<div class="baris"><span>Sisi terpanjang jadi <b>${a.sisi}px</b></span>${geser("sisi", a.sisi, 600, 8000, 100, 92)}</div>
-      <div class="cek"><label><input type="checkbox" ${a.perbesar ? "checked" : ""} onchange="set('perbesar',this.checked)"> perbesar juga foto yang lebih kecil</label></div>` : ""}
-    ${a.ukuran === "piksel" ? `<div class="baris"><span>Ukuran hasil (pixel)</span><div class="dua">
-        <input type="number" min="16" max="12000" value="${a.piksel_w}" style="width:100px" onchange="set('piksel_w',+this.value)"> ×
-        <input type="number" min="16" max="12000" value="${a.piksel_h}" style="width:100px" onchange="set('piksel_h',+this.value)"> px</div>
-        <div class="dua" style="flex-wrap:wrap;margin-top:6px">${[[1080, 1350, "IG 4:5"], [1080, 1080, "IG 1:1"], [1920, 1080, "Full HD"], [3840, 2160, "4K"], [2048, 2048, "2048²"], [3000, 2000, "3000×2000"]].map(([ww, hh, t]) =>
-          `<button class="kecil ${a.piksel_w == ww && a.piksel_h == hh ? "on" : ""}" onclick="ATUR.piksel_w=${ww};set('piksel_h',${hh})">${t}</button>`).join("")}</div></div>
-      <div class="baris"><span>Kalau perbandingan foto beda</span>${pilihan("piksel_isi", a.piksel_isi, [["pas", "Pas di dalam"], ["penuhi", "Penuhi & potong"], ["regang", "Regang"]])}</div>
-      <div class="cek" style="flex-direction:column;gap:4px"><label><input type="checkbox" ${a.piksel_putar ? "checked" : ""} onchange="set('piksel_putar',this.checked)"> ikuti orientasi foto (portrait ↔ landscape)</label>
-        ${a.piksel_isi === "pas" ? `<label><input type="checkbox" ${a.perbesar ? "checked" : ""} onchange="set('perbesar',this.checked)"> perbesar juga foto yang lebih kecil</label>` : ""}</div>` : ""}
-    ${a.ukuran === "persen" ? `<div class="baris"><span>Skala <b>${a.persen}%</b> ${a.persen > 100 ? "(naikkan resolusi)" : a.persen < 100 ? "(turunkan resolusi)" : ""}</span>${geser("persen", a.persen, 10, 400, 5)}</div>
-      <div class="dua" style="flex-wrap:wrap">${[25, 50, 75, 100, 150, 200].map(v => `<button class="kecil ${a.persen == v ? "on" : ""}" onclick="set('persen',${v})">${v}%</button>`).join("")}</div>` : ""}
-    ${Mesin.IOS ? `<div style="font-size:12px;color:var(--mute);margin-top:8px">Di iPhone/iPad hasil maksimal ±16 MP per foto (batas Safari).</div>` : ""}
-  </div>
-  <div class="blok"><h3>🗜 Kualitas (kompresi)</h3>
-    ${pilihan("kompres", a.kompres, [["mutu", "Mutu JPEG"], ["mb", "Target MB"], ["asli", "Tanpa kompres ulang"]])}
-    ${a.kompres === "mutu" ? `<div class="baris"><span>Mutu JPEG: <b>${a.jpeg}</b></span>${geser("jpeg", a.jpeg, 40, 100, 1, 70)}</div>` : ""}
-    ${a.kompres === "mb" ? `<div class="baris"><span>Maksimal <b>${a.mb} MB</b> per foto</span>${geser("mb", a.mb, 0.1, 20, 0.1, 80)}</div>
-      <div style="font-size:12px;color:var(--mute)">Mutu dicari otomatis; kalau masih kebesaran, resolusi ikut turun. Foto yang sudah lebih kecil dikirim apa adanya.</div>` : ""}
-    ${a.kompres === "asli" ? `<div style="font-size:12px;color:var(--mute)">Kalau ukuran Asli & tanpa watermark/preset/teks, file dikirim persis aslinya.</div>` : ""}
-    <div id="infoUkuran" style="font-size:12px;margin-top:8px;color:var(--teal2);font-weight:600"></div>
-  </div>
-  <div class="blok"><h3>🏷 Nama file hasil</h3>
-    ${pilihan("nama.mode", n.mode, [["asli", "Pakai nama asli"], ["baru", "Ganti nama baru"]])}
-    ${n.mode === "baru" ? `<label class="baris"><span>Nama baru (kosong = nama folder; <code>{folder}</code> = nama folder)</span>
-      <input type="text" value="${esc(n.teks)}" placeholder="${esc((terpilih()[0] || {}).nama || "Nama Folder")}" onchange="set('nama.teks',this.value)"></label>` : ""}
-    <div class="cek baris"><label><input type="checkbox" ${n.urutan ? "checked" : ""} onchange="set('nama.urutan',this.checked)"> Tambahkan urutan <b>x of y</b></label></div>
-    ${n.urutan ? `<div class="dua baris" style="flex-wrap:wrap">${["(x of y)", "(00x of y)", "- x of y", "_x"].map(k => `<button class="kecil ${n.format === k ? "on" : ""}" onclick="set('nama.format','${k}')">${k.replace("00x", "001").replace("x of y", "1 of y").replace("_x", "_001")}</button>`).join("")}</div>` : ""}
-    <div style="font-size:12px;color:var(--mute)">Contoh: <b style="color:var(--teal2)">${esc(contohNama(1).s)}.jpg</b>, ${esc(contohNama(2).s)}.jpg …</div>
-  </div>
-  <div class="blok"><h3>Watermark logo <label class="saklar"><input type="checkbox" ${w.aktif ? "checked" : ""} onchange="set('wm.aktif',this.checked)"> aktif</label></h3>
-    <div class="${w.aktif ? "" : "mati"}">
-    <label class="baris"><span>Teks di bawah logo (opsional)</span><input type="text" value="${esc(w.teks)}" placeholder="mis. @akunkamu" onchange="set('wm.teks',this.value)"></label>
-    <div class="baris"><span>Logo (dari pustaka)</span><div class="pk-grid">
-      <div class="pk kosong2 ${!w.logo ? "on" : ""}" onclick="set('wm.logo','')"><div class="k"><b>Tanpa logo (teks saja)</b></div></div>
-      ${P.watermark.map(x => kartuPk(x, { pilih: `set('wm.logo','${x.id}')`, aktif: w.logo === x.id, hapus: false })).join("")}
-      <div class="pk tambah" onclick="tambahPustaka('watermark').then(id=>{ if(id){ATUR.wm.logo=id;ATUR.wm.aktif=true} set('wm.aktif',ATUR.wm.aktif) })">＋ Tambah logo</div></div></div>
-    <div class="baris"><span>Posisi</span><div class="posisi">${POS.map(p => `<button class="${w.posisi === p ? "on" : ""}" onclick="set('wm.posisi','${p}')">${NPOS[p]}</button>`).join("")}</div>
-      <div class="posisi" style="grid-template-columns:1fr 1fr;margin-top:5px"><button class="${w.posisi === "ulang" ? "on" : ""}" onclick="set('wm.posisi','ulang')">▦ Berulang miring</button>
-        <button class="${w.posisi === "penuh" ? "on" : ""}" onclick="set('wm.posisi','penuh')">⛶ Pas ukuran foto</button></div></div>
-    ${w.posisi === "penuh" ? `<div class="baris"><span>Logo/bingkai dibentangkan seukuran foto</span>${pilihan("wm.isi", w.isi || "regang", [["regang", "Regang"], ["pas", "Pas tanpa gepeng"], ["penuhi", "Penuhi"]])}</div>
-      <div class="baris"><span>Logo khusus foto portrait (opsional)</span><div class="pk-grid">
-        <div class="pk kosong2 ${!w.logo_portrait ? "on" : ""}" onclick="set('wm.logo_portrait','')"><div class="k"><b>Sama dengan logo di atas</b></div></div>
-        ${P.watermark.map(x => kartuPk(x, { pilih: `set('wm.logo_portrait','${x.id}')`, aktif: w.logo_portrait === x.id, hapus: false })).join("")}</div></div>` : ""}
-    ${w.posisi !== "penuh" ? `<div class="baris"><span>Ukuran: <b>${w.ukuran}%</b> lebar foto</span><input type="range" min="5" max="60" value="${w.ukuran}" onchange="set('wm.ukuran',+this.value)"></div>` : ""}
-    <div class="baris"><span>Kepekatan: <b>${w.opasitas}%</b></span><input type="range" min="10" max="100" value="${w.opasitas}" onchange="set('wm.opasitas',+this.value)"></div>
-    <div class="cek"><label><input type="checkbox" ${w.nama_file ? "checked" : ""} onchange="set('wm.nama_file',this.checked)"> nama file</label>
-      <label><input type="checkbox" ${w.jam ? "checked" : ""} onchange="set('wm.jam',this.checked)"> jam jepret</label></div>
-    </div></div>
-  <div class="blok"><h3>🔤 Teks custom di foto <label class="saklar"><input type="checkbox" ${lb.aktif ? "checked" : ""} onchange="set('label.aktif',this.checked)"> aktif</label></h3>
-    <div class="${lb.aktif ? "" : "mati"}">
-    <label class="baris"><span>Tulis teks (boleh beberapa baris). Ketuk kode untuk menyisipkan isian otomatis.</span>
-      <textarea id="teksLabel" rows="2" onchange="set('label.teks',this.value)">${esc(lb.teks)}</textarea></label>
-    <div class="dua baris" style="flex-wrap:wrap;gap:5px">${["nama_baru", "nama_file", "no", "total", "folder", "subfolder", "tanggal", "jam"].map(k => `<button class="kecil" onmousedown="event.preventDefault()" onclick="sisipKode('${k}')">{${k}}</button>`).join("")}</div>
-    <div style="font-size:12px;color:var(--mute);margin:-4px 0 10px">Contoh: <b style="color:var(--teal2);white-space:pre-line">${esc(contohLb) || "—"}</b></div>
-    <div class="baris"><span>Posisi</span><div class="posisi">${POS.map(p => `<button class="${lb.posisi === p ? "on" : ""}" onclick="set('label.posisi','${p}')">${NPOS[p].split(" ")[0]}</button>`).join("")}</div></div>
-    <div class="baris"><span>Ukuran huruf: <b>${lb.ukuran}%</b></span><input type="range" min="1" max="12" step="0.5" value="${lb.ukuran}" onchange="set('label.ukuran',+this.value)"></div>
-    <div class="baris"><span>Warna</span><div class="dua" style="flex-wrap:wrap">${[["#ffffff", "Putih"], ["#111111", "Hitam"], ["#facc15", "Kuning"], ["#14b8a6", "Tosca"]].map(([c, t]) =>
-      `<button class="kecil ${lb.warna === c ? "on" : ""}" onclick="set('label.warna','${c}')"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};border:1px solid #9994;margin-right:4px"></span>${t}</button>`).join("")}
-      <input type="color" value="${lb.warna}" onchange="set('label.warna',this.value)" style="width:38px;height:30px;border:1px solid var(--line);border-radius:6px;padding:1px"></div></div>
-    <div class="baris"><span>Latar teks</span>${pilihan("label.latar", lb.latar, [["tanpa", "Tanpa"], ["bayangan", "Bayangan"], ["kotak", "Kotak"]])}</div>
-    <div class="baris"><span>Kepekatan: <b>${lb.opasitas}%</b></span><input type="range" min="10" max="100" value="${lb.opasitas}" onchange="set('label.opasitas',+this.value)"></div>
-    <div class="cek"><label><input type="checkbox" ${lb.tebal ? "checked" : ""} onchange="set('label.tebal',this.checked)"> huruf tebal</label></div>
-    </div></div>
-  <div class="blok"><h3>🎨 Preset warna</h3>
-    <div class="baris"><div class="pk-grid">
-      <div class="pk kosong2 ${!a.lut.file ? "on" : ""}" onclick="set('lut.file','')"><div class="k"><b>Tanpa preset</b></div></div>
-      ${P.preset.map(x => kartuPk(x, { pilih: `set('lut.file','${x.id}')`, aktif: a.lut.file === x.id, hapus: false })).join("")}
-      <div class="pk tambah" onclick="tambahPustaka('preset').then(id=>{ if(id) ATUR.lut.file=id; set('lut.kekuatan',ATUR.lut.kekuatan) })">＋ Tambah preset (.cube / .xmp / DNG)</div></div></div>
-    <div class="baris ${a.lut.file ? "" : "mati"}"><span>Kekuatan: <b>${a.lut.kekuatan}%</b></span><input type="range" min="0" max="100" value="${a.lut.kekuatan}" onchange="set('lut.kekuatan',+this.value)"></div>
-  </div>`;
+  const isi = {
+    ukuran: () => `
+      ${pilihan("ukuran", a.ukuran, [["asli", "Asli"], ["sisi", "Sisi px"], ["piksel", "Lebar×tinggi"], ["persen", "Persen %"]])}
+      ${a.ukuran === "asli" ? `<div class="ket">Resolusi tidak diubah.</div>` : ""}
+      ${a.ukuran === "sisi" ? `<div class="baris"><span>Sisi terpanjang jadi <b>${a.sisi}px</b></span>${geser("sisi", a.sisi, 600, 8000, 100, 92)}</div>
+        <div class="cek"><label><input type="checkbox" ${a.perbesar ? "checked" : ""} onchange="set('perbesar',this.checked)"> perbesar juga foto yang lebih kecil</label></div>` : ""}
+      ${a.ukuran === "piksel" ? `<div class="baris"><span>Ukuran hasil (pixel)</span><div class="dua">
+          <input type="number" min="16" max="12000" value="${a.piksel_w}" style="width:100px" onchange="set('piksel_w',+this.value)"> ×
+          <input type="number" min="16" max="12000" value="${a.piksel_h}" style="width:100px" onchange="set('piksel_h',+this.value)"> px</div>
+          <div class="dua" style="flex-wrap:wrap;margin-top:6px">${[[1080, 1350, "IG 4:5"], [1080, 1080, "IG 1:1"], [1920, 1080, "Full HD"], [3840, 2160, "4K"], [2048, 2048, "2048²"], [3000, 2000, "3000×2000"]].map(([ww, hh, t]) =>
+            `<button class="kecil ${a.piksel_w == ww && a.piksel_h == hh ? "on" : ""}" onclick="ATUR.piksel_w=${ww};set('piksel_h',${hh})">${t}</button>`).join("")}</div></div>
+        <div class="baris"><span>Kalau perbandingan foto beda</span>${pilihan("piksel_isi", a.piksel_isi, [["pas", "Pas di dalam"], ["penuhi", "Penuhi & potong"], ["regang", "Regang"]])}</div>
+        <div class="cek" style="flex-direction:column;gap:4px"><label><input type="checkbox" ${a.piksel_putar ? "checked" : ""} onchange="set('piksel_putar',this.checked)"> ikuti orientasi foto (portrait ↔ landscape)</label>
+          ${a.piksel_isi === "pas" ? `<label><input type="checkbox" ${a.perbesar ? "checked" : ""} onchange="set('perbesar',this.checked)"> perbesar juga foto yang lebih kecil</label>` : ""}</div>` : ""}
+      ${a.ukuran === "persen" ? `<div class="baris"><span>Skala <b>${a.persen}%</b> ${a.persen > 100 ? "(naikkan resolusi)" : a.persen < 100 ? "(turunkan resolusi)" : ""}</span>${geser("persen", a.persen, 10, 400, 5)}</div>
+        <div class="dua" style="flex-wrap:wrap">${[25, 50, 75, 100, 150, 200].map(v => `<button class="kecil ${a.persen == v ? "on" : ""}" onclick="set('persen',${v})">${v}%</button>`).join("")}</div>` : ""}
+      ${Mesin.IOS ? `<div class="ket" style="margin-top:8px">Di iPhone/iPad hasil maksimal ±16 MP per foto (batas Safari).</div>` : ""}`,
+    kualitas: () => `
+      ${pilihan("kompres", a.kompres, [["mutu", "Mutu JPEG"], ["mb", "Target MB"], ["asli", "Tanpa kompres ulang"]])}
+      ${a.kompres === "mutu" ? `<div class="baris"><span>Mutu JPEG: <b>${a.jpeg}</b></span>${geser("jpeg", a.jpeg, 40, 100, 1, 70)}</div>` : ""}
+      ${a.kompres === "mb" ? `<div class="baris"><span>Maksimal <b>${a.mb} MB</b> per foto</span>${geser("mb", a.mb, 0.1, 20, 0.1, 80)}</div>
+        <div class="ket">Mutu dicari otomatis; kalau masih kebesaran, resolusi ikut turun. Foto yang sudah lebih kecil dikirim apa adanya.</div>` : ""}
+      ${a.kompres === "asli" ? `<div class="ket">Kalau ukuran Asli & tanpa watermark/preset/teks, file dikirim persis aslinya.</div>` : ""}
+      <div id="infoUkuran" style="font-size:12px;margin-top:8px;color:var(--teal2);font-weight:600"></div>`,
+    nama: () => `
+      ${pilihan("nama.mode", n.mode, [["asli", "Pakai nama asli"], ["baru", "Ganti nama baru"]])}
+      ${n.mode === "baru" ? `<label class="baris"><span>Nama baru (kosong = nama folder; <code>{folder}</code> = nama folder)</span>
+        <input type="text" value="${esc(n.teks)}" placeholder="${esc((terpilih()[0] || {}).nama || "Nama Folder")}" onchange="set('nama.teks',this.value)"></label>` : ""}
+      <div class="cek baris"><label><input type="checkbox" ${n.urutan ? "checked" : ""} onchange="set('nama.urutan',this.checked)"> Tambahkan urutan <b>x of y</b></label></div>
+      ${n.urutan ? `<div class="dua baris" style="flex-wrap:wrap">${["(x of y)", "(00x of y)", "- x of y", "_x"].map(k => `<button class="kecil ${n.format === k ? "on" : ""}" onclick="set('nama.format','${k}')">${k.replace("00x", "001").replace("x of y", "1 of y").replace("_x", "_001")}</button>`).join("")}</div>` : ""}
+      <div class="ket">Contoh: <b style="color:var(--teal2)">${esc(contohNama(1).s)}.jpg</b>, ${esc(contohNama(2).s)}.jpg …</div>`,
+    wm: () => `<div class="${w.aktif ? "" : "mati"}">
+      <div class="baris"><span>Logo (dari pustaka)</span><div class="pk-grid">
+        <div class="pk kosong2 ${!w.logo ? "on" : ""}" onclick="set('wm.logo','')"><div class="k"><b>Tanpa logo (teks saja)</b></div></div>
+        ${P.watermark.map(x => kartuPk(x, { pilih: `set('wm.logo','${x.id}')`, aktif: w.logo === x.id, hapus: false })).join("")}
+        <div class="pk tambah" onclick="tambahPustaka('watermark').then(id=>{ if(id){ATUR.wm.logo=id;ATUR.wm.aktif=true} set('wm.aktif',ATUR.wm.aktif) })">＋ Tambah logo</div></div></div>
+      <label class="baris"><span>Teks di bawah logo (opsional)</span><input type="text" value="${esc(w.teks)}" placeholder="mis. @akunkamu" onchange="set('wm.teks',this.value)"></label>
+      <div class="baris"><span>Posisi</span><div class="posisi">${POS.map(p => `<button class="${w.posisi === p ? "on" : ""}" onclick="set('wm.posisi','${p}')">${NPOS[p]}</button>`).join("")}</div>
+        <div class="posisi" style="grid-template-columns:1fr 1fr;margin-top:5px"><button class="${w.posisi === "ulang" ? "on" : ""}" onclick="set('wm.posisi','ulang')">▦ Berulang miring</button>
+          <button class="${w.posisi === "penuh" ? "on" : ""}" onclick="set('wm.posisi','penuh')">⛶ Pas ukuran foto</button></div></div>
+      ${w.posisi === "penuh" ? `<div class="baris"><span>Logo/bingkai dibentangkan seukuran foto</span>${pilihan("wm.isi", w.isi || "regang", [["regang", "Regang"], ["pas", "Pas tanpa gepeng"], ["penuhi", "Penuhi"]])}</div>
+        <div class="baris"><span>Logo khusus foto portrait (opsional)</span><div class="pk-grid">
+          <div class="pk kosong2 ${!w.logo_portrait ? "on" : ""}" onclick="set('wm.logo_portrait','')"><div class="k"><b>Sama dengan logo di atas</b></div></div>
+          ${P.watermark.map(x => kartuPk(x, { pilih: `set('wm.logo_portrait','${x.id}')`, aktif: w.logo_portrait === x.id, hapus: false })).join("")}</div></div>` : ""}
+      ${w.posisi !== "penuh" ? `<div class="baris"><span>Ukuran: <b>${w.ukuran}%</b> lebar foto</span><input type="range" min="5" max="60" value="${w.ukuran}" onchange="set('wm.ukuran',+this.value)"></div>` : ""}
+      <div class="baris"><span>Kepekatan: <b>${w.opasitas}%</b></span><input type="range" min="10" max="100" value="${w.opasitas}" onchange="set('wm.opasitas',+this.value)"></div>
+      <div class="cek"><label><input type="checkbox" ${w.nama_file ? "checked" : ""} onchange="set('wm.nama_file',this.checked)"> nama file</label>
+        <label><input type="checkbox" ${w.jam ? "checked" : ""} onchange="set('wm.jam',this.checked)"> jam jepret</label></div></div>`,
+    label: () => `<div class="${lb.aktif ? "" : "mati"}">
+      <label class="baris"><span>Tulis teks (boleh beberapa baris). Ketuk kode untuk menyisipkan isian otomatis.</span>
+        <textarea id="teksLabel" rows="2" onchange="set('label.teks',this.value)">${esc(lb.teks)}</textarea></label>
+      <div class="dua baris" style="flex-wrap:wrap;gap:5px">${["nama_baru", "nama_file", "no", "total", "folder", "subfolder", "tanggal", "jam"].map(k => `<button class="kecil" onmousedown="event.preventDefault()" onclick="sisipKode('${k}')">{${k}}</button>`).join("")}</div>
+      <div class="ket" style="margin:-4px 0 10px">Contoh: <b style="color:var(--teal2);white-space:pre-line">${esc(contohLb()) || "—"}</b></div>
+      <div class="baris"><span>Posisi</span><div class="posisi">${POS.map(p => `<button class="${lb.posisi === p ? "on" : ""}" onclick="set('label.posisi','${p}')">${NPOS[p].split(" ")[0]}</button>`).join("")}</div></div>
+      <div class="baris"><span>Ukuran huruf: <b>${lb.ukuran}%</b></span><input type="range" min="1" max="12" step="0.5" value="${lb.ukuran}" onchange="set('label.ukuran',+this.value)"></div>
+      <div class="baris"><span>Warna</span><div class="dua" style="flex-wrap:wrap">${[["#ffffff", "Putih"], ["#111111", "Hitam"], ["#facc15", "Kuning"], ["#14b8a6", "Tosca"]].map(([c, t]) =>
+        `<button class="kecil ${lb.warna === c ? "on" : ""}" onclick="set('label.warna','${c}')"><span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${c};border:1px solid #9994;margin-right:4px"></span>${t}</button>`).join("")}
+        <input type="color" value="${lb.warna}" onchange="set('label.warna',this.value)" style="width:38px;height:30px;border:1px solid var(--line);border-radius:6px;padding:1px"></div></div>
+      <div class="baris"><span>Latar teks</span>${pilihan("label.latar", lb.latar, [["tanpa", "Tanpa"], ["bayangan", "Bayangan"], ["kotak", "Kotak"]])}</div>
+      <div class="baris"><span>Kepekatan: <b>${lb.opasitas}%</b></span><input type="range" min="10" max="100" value="${lb.opasitas}" onchange="set('label.opasitas',+this.value)"></div>
+      <div class="cek"><label><input type="checkbox" ${lb.tebal ? "checked" : ""} onchange="set('label.tebal',this.checked)"> huruf tebal</label></div></div>`,
+    lut: () => `
+      <div class="baris"><div class="pk-grid">
+        <div class="pk kosong2 ${!a.lut.file ? "on" : ""}" onclick="set('lut.file','')"><div class="k"><b>Tanpa preset</b></div></div>
+        ${P.preset.map(x => kartuPk(x, { pilih: `set('lut.file','${x.id}')`, aktif: a.lut.file === x.id, hapus: false })).join("")}
+        <div class="pk tambah" onclick="tambahPustaka('preset').then(id=>{ if(id) ATUR.lut.file=id; set('lut.kekuatan',ATUR.lut.kekuatan) })">＋ Tambah preset (.cube / .xmp / DNG)</div></div></div>
+      <div class="baris ${a.lut.file ? "" : "mati"}" style="margin-bottom:0"><span>Kekuatan: <b>${a.lut.kekuatan}%</b></span><input type="range" min="0" max="100" value="${a.lut.kekuatan}" onchange="set('lut.kekuatan',+this.value)"></div>`,
+  };
+  const saklar = (k, on) => `<label class="saklar" onclick="event.stopPropagation()" title="Nyalakan / matikan"><input type="checkbox" ${on ? "checked" : ""} onchange="if(this.checked)BUKA='${k}';set('${k}.aktif',this.checked)"></label>`;
+  $("#aturBlok").innerHTML = `<div class="judul">Atur hasil <small>berlaku untuk semua folder</small></div>
+    <div class="akor">${BAGIAN.map(([k, ik, t]) => {
+      const buka = BUKA === k, mati = (k === "wm" && !w.aktif) || (k === "label" && !lb.aktif);
+      return `<div class="bag ${buka ? "buka" : ""}">
+        <div class="kepala-bag" role="button" tabindex="0" aria-expanded="${buka}" onclick="bukaBagian('${k}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();bukaBagian('${k}')}">
+          <span class="ik">${ik}</span><b>${t}</b><span class="rk ${mati ? "redup" : ""}">${esc(r[k])}</span>
+          ${k === "wm" || k === "label" ? saklar(k, k === "wm" ? w.aktif : lb.aktif) : ""}<span class="pana">›</span></div>
+        ${buka ? `<div class="isi-bag">${isi[k]()}</div>` : ""}</div>`;
+    }).join("")}</div>`;
+  gambarProfil();
 }
 function sisipKode(k) {
   const ta = $("#teksLabel"), t = ATUR.label.teks || "", a = ta ? ta.selectionStart : t.length, b = ta ? ta.selectionEnd : t.length;
   set("label.teks", t.slice(0, a) + "{" + k + "}" + t.slice(b));
 }
 
-/* ---------------- tujuan + tombol export ---------------- */
-function gambarTombol() {
-  if (MODE !== "ekspor" || !$("#exTombol")) return;
-  const tj = ATUR.tujuan, pakai = k => tj.includes(k), p = terpilih(), nf = p.reduce((s, g) => s + g.file.length, 0);
-  const butuhG = pakai("drive") || pakai("photos");
-  const nama = { drive: "Google Drive", photos: "Google Photos", lokal: Lokal.bisaFolder() ? "folder di komputer" : "unduhan ZIP" };
-  const label = tj.map(k => nama[k]).join(" + ");
+/* ---------------- profil export: semua pengaturan disimpan, dipakai lagi sekali ketuk ---------------- */
+let PROFIL = []; try { PROFIL = JSON.parse(localStorage.getItem("kf_profil") || "[]"); } catch (e) {}
+let PROFIL_AKTIF = localStorage.getItem("kf_profil_aktif") || "";
+const simpanProfil = () => { try { localStorage.setItem("kf_profil", JSON.stringify(PROFIL)); localStorage.setItem("kf_profil_aktif", PROFIL_AKTIF); } catch (e) {} };
+const samaAtur = (x, y) => JSON.stringify(gabung(BAWAAN, x)) === JSON.stringify(gabung(BAWAAN, y));
+function gambarProfil() {
+  if (MODE !== "ekspor" || !$("#exProfil")) return;
+  const akt = PROFIL.find(x => x.id === PROFIL_AKTIF), ubah = akt && !samaAtur(akt.atur, ATUR);
+  $("#exProfil").innerHTML = `<div class="judul">Profil <small>${PROFIL.length ? "ketuk untuk memakai semua pengaturannya" : "simpan pengaturan yang sering dipakai"}</small></div>
+    <div class="profil">${PROFIL.map(x => `<button class="pchip ${x.id === PROFIL_AKTIF ? "on" : ""}" onclick="pakaiProfil('${x.id}')">${esc(x.nama)}${x.id === PROFIL_AKTIF && ubah ? " •" : ""}</button>`).join("")}
+      ${ubah ? `<button class="pchip polos" onclick="perbaruiProfil()">Simpan perubahan</button>` : ""}
+      <button class="pchip tambah" onclick="simpanSebagaiProfil()">＋ ${PROFIL.length ? "Profil baru" : "Simpan pengaturan ini sebagai profil"}</button>
+      ${akt ? `<button class="pchip polos hapus-p" title="Hapus profil ${esc(akt.nama)}" onclick="hapusProfil('${akt.id}')">🗑</button>` : ""}</div>
+    ${ubah ? `<div class="ket" style="margin-top:6px">“${esc(akt.nama)}” diubah. Simpan perubahan, atau ketuk profilnya untuk kembali.</div>` : ""}`;
+}
+function pakaiProfil(id) {
+  const p = PROFIL.find(x => x.id === id); if (!p) return;
+  ATUR = gabung(BAWAAN, p.atur); PROFIL_AKTIF = id; simpanAtur(); simpanProfil();
+  gambarAtur(); gambarTombol(); pratinjau(); toast(`Profil “${p.nama}” dipakai`);
+}
+function simpanSebagaiProfil() {
+  const n = prompt("Nama profil (mis. Klien Drive 2 MB, IG 1080):", ""); if (!n || !n.trim()) return;
+  const id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  PROFIL.push({ id, nama: n.trim(), atur: salin(ATUR) }); PROFIL_AKTIF = id; simpanProfil(); gambarProfil(); toast(`Profil “${n.trim()}” disimpan ✓`);
+}
+function perbaruiProfil() {
+  const p = PROFIL.find(x => x.id === PROFIL_AKTIF); if (!p) return;
+  p.atur = salin(ATUR); simpanProfil(); gambarProfil(); toast(`Profil “${p.nama}” diperbarui ✓`);
+}
+function hapusProfil(id) {
+  const p = PROFIL.find(x => x.id === id); if (!p || !confirm(`Hapus profil “${p.nama}”? Pengaturan yang sedang dipakai tidak berubah.`)) return;
+  PROFIL = PROFIL.filter(x => x.id !== id); if (PROFIL_AKTIF === id) PROFIL_AKTIF = ""; simpanProfil(); gambarProfil();
+}
+
+/* ---------------- tujuan + bar export ---------------- */
+const NAMA_TJ = () => ({ drive: "Google Drive", photos: "Google Photos", lokal: Lokal.bisaFolder() ? "folder di komputer" : "unduhan ZIP" });
+function gambarTombol() { gambarTujuan(); gambarBar(); gambarProfil(); }
+function gambarTujuan() {
+  if (MODE !== "ekspor" || !$("#exTujuan")) return;
+  const tj = ATUR.tujuan, pakai = k => tj.includes(k), butuhG = pakai("drive") || pakai("photos");
   let peringatan = "";
-  if (butuhG && !KIRIM_CONFIG.clientId) peringatan = `<div class="pesan bad" style="margin-top:0">Login Google belum disiapkan di aplikasi ini.</div>`;
-  else if (butuhG && !Google.aktif()) peringatan = `<div class="pesan warn" style="margin-top:0">Masuk ke akun Google dulu. <button class="kecil" onclick="masukGoogle()">Masuk Google</button></div>`;
-  else if (pakai("photos") && !Google.bisaPhotos()) peringatan = `<div class="pesan warn" style="margin-top:0">Izin Google Photos belum diberikan. <button class="kecil" onclick="masukGoogle(true)">Izinkan</button> (centang semua izin)</div>`;
-  $("#exTombol").innerHTML = `<h3>③ Tujuan & export <span style="font-weight:400;color:var(--mute);font-size:12px">boleh lebih dari satu</span></h3>
-    <div class="pilihan baris">${[["drive", "📁 Google Drive"], ["photos", "🖼 Google Photos"], ["lokal", Lokal.bisaFolder() ? "📂 Folder di komputer" : "⬇ Unduh ke perangkat"]].map(([k, t]) =>
+  if (butuhG && !KIRIM_CONFIG.clientId) peringatan = `<div class="pesan bad">Login Google belum disiapkan di aplikasi ini.</div>`;
+  else if (butuhG && !Google.aktif()) peringatan = `<div class="pesan warn">Masuk ke akun Google dulu. <button class="kecil" onclick="masukGoogle()">Masuk Google</button></div>`;
+  else if (pakai("photos") && !Google.bisaPhotos()) peringatan = `<div class="pesan warn">Izin Google Photos belum diberikan. <button class="kecil" onclick="masukGoogle(true)">Izinkan</button> (centang semua izin)</div>`;
+  $("#exTujuan").innerHTML = `<div class="judul">Tujuan <small>boleh lebih dari satu</small></div>
+    <div class="blok" style="margin-bottom:0">
+    <div class="pilihan">${[["drive", "📁 Google Drive"], ["photos", "🖼 Google Photos"], ["lokal", Lokal.bisaFolder() ? "📂 Folder di komputer" : "⬇ Unduh ke perangkat"]].map(([k, t]) =>
       `<button class="${pakai(k) ? "on" : ""}" style="flex:1 1 30%" onclick="pilihTujuan('${k}')">${pakai(k) ? "✓ " : ""}${t}</button>`).join("")}</div>
-    ${pakai("lokal") ? `<div style="font-size:12px;color:var(--mute);margin:-4px 0 10px">${Lokal.bisaFolder() ? "Saat Export kamu memilih folder tujuan di komputer; subfolder ikut dibuat." : "Hasil tiap folder diunduh sebagai file ZIP (di iPhone masuk ke app Files). Untuk ratusan foto resolusi penuh, lebih aman pakai Google Drive."}</div>` : ""}
-    ${peringatan}
-    <button class="utama besar" onclick="mulaiEkspor()" ${!p.length || JALAN ? "disabled" : ""}>📤 Export ${p.length || ""} folder · ${nf} file ke ${label}</button>
-    <div style="font-size:12px;color:var(--mute);margin-top:8px;text-align:center">Foto asli tidak diubah. ${MOBILE ? "Biarkan layar menyala & aplikasi terbuka selama export." : ""}</div>`;
+    ${pakai("drive") ? blokFolderDrive() : ""}
+    ${pakai("photos") ? `<div class="ket" style="margin-top:10px">Google Photos: satu album per folder, namanya sama dengan nama folder.</div>` : ""}
+    ${pakai("lokal") ? `<div class="ket" style="margin-top:10px">${Lokal.bisaFolder() ? "Saat Export kamu memilih folder tujuan di komputer; subfolder ikut dibuat." : "Hasil tiap folder diunduh sebagai file ZIP (di iPhone masuk ke app Files). Untuk ratusan foto resolusi penuh, lebih aman pakai Google Drive."}</div>` : ""}
+    ${peringatan}</div>`;
+}
+function gambarBar() {
+  if (MODE !== "ekspor" || !$("#exBar")) return;
+  const p = terpilih(), nf = p.reduce((s, g) => s + g.file.length, 0), jalan = GRUP.filter(g => g.status === "jalan");
+  const f = ATUR.drive_folder, ke = ATUR.tujuan.map(k => k === "drive" && f ? `Drive › ${f.nama}` : NAMA_TJ()[k]).join(" + ");
+  let atas, bawah;
+  if (JALAN) { const ok = jalan.reduce((s, g) => s + g.ok + g.gagal, 0), tot = jalan.reduce((s, g) => s + g.total, 0); atas = `Sedang export… ${ok}/${tot} file`; bawah = MOBILE ? "Biarkan layar menyala & aplikasi terbuka" : "Foto asli tidak diubah"; }
+  else if (!GRUP.some(g => g.status === "siap")) { atas = "Belum ada foto"; bawah = `Tujuan: ${ke}`; }
+  else { atas = `${p.length} folder · ${nf} file`; bawah = `→ ${ke}`; }
+  $("#exBar").innerHTML = `<div class="rg"><b>${esc(atas)}</b><span>${esc(bawah)}</span></div>
+    <button class="utama" onclick="mulaiEkspor()" ${!p.length || JALAN ? "disabled" : ""}>📤 Export</button>`;
+}
+let UBAH_DF = false;
+function blokFolderDrive() {
+  const f = ATUR.drive_folder, g = terpilih()[0] || { nama: "Nama Folder" };
+  const contoh = f ? (ATUR.drive_sub ? `${f.nama} › ${g.nama}` : f.nama) : `Kirim Foto › ${g.nama}`;
+  return `<div class="dfolder">
+    <div class="dua"><span style="flex:1;min-width:0">Masuk ke <b style="color:var(--teal2)">${esc(contoh)}</b>${f ? ` · <a href="https://drive.google.com/drive/folders/${f.id}" target="_blank" rel="noopener">buka</a>` : ""}</span>
+      <button class="kecil" onclick="UBAH_DF=!UBAH_DF;gambarTujuan()">${UBAH_DF ? "Tutup" : "Ganti folder"}</button></div>
+    ${UBAH_DF ? `<div style="margin-top:10px">
+      <div class="pilihan" style="margin-bottom:8px">
+        <button class="${!f ? "on" : ""}" onclick="ATUR.drive_folder=null;simpanAtur();gambarTombol()">Otomatis (Kirim Foto)</button>
+        <button class="${f ? "on" : ""}" onclick="pilihFolderDrive()">📂 ${f ? esc(f.nama) : "Pilih folder…"}</button></div>
+      <div class="dua"><input type="text" id="linkFolder" placeholder="atau tempel link folder Drive di sini" style="font-size:13px">
+        <button class="kecil" onclick="pilihFolderDrive($('#linkFolder').value)">Pakai</button></div>
+      ${f ? `<div class="cek" style="margin-top:8px"><label><input type="checkbox" ${ATUR.drive_sub ? "checked" : ""} onchange="ATUR.drive_sub=this.checked;simpanAtur();gambarTombol()"> buat subfolder per folder export</label></div>` : ""}</div>` : ""}
+  </div>`;
+}
+async function pilihFolderDrive(link = "") {
+  if (!Google.aktif() && !Google.punyaSesi()) return masukGoogle();
+  try {
+    const f = await Google.pilihFolder(link);
+    if (f) { ATUR.drive_folder = f; UBAH_DF = false; simpanAtur(); toast(`Folder tujuan: ${f.nama} ✓`); }
+  } catch (e) { alert(e.message); }
+  gambarTombol();
 }
 function pilihTujuan(k) { const t = ATUR.tujuan, i = t.indexOf(k); if (i >= 0) { if (t.length > 1) t.splice(i, 1); } else t.push(k); simpanAtur(); gambarTombol(); }
 
@@ -458,8 +591,10 @@ async function kerjakan(t, a, as) {
         try {
           await tungguOnline();
           if (tj === "drive") {
-            const induk = await Google.jalurDrive(["Kirim Foto", g.nama, ...bagian]);
-            if (!g.link.drive) g.link.drive = await Google.jalurDrive(["Kirim Foto", g.nama]);
+            const df = a.drive_folder, akar = df ? df.id : "root";
+            const dasar = df ? (a.drive_sub ? [g.nama] : []) : ["Kirim Foto", g.nama];
+            const induk = await Google.jalurDrive([...dasar, ...bagian], akar);
+            if (!g.link.drive) g.link.drive = dasar.length ? await Google.jalurDrive(dasar, akar) : akar;
             await Google.unggahDrive(blob, nama, mime, induk, () => {});
           } else if (tj === "photos") {
             const al = await Google.album(bagian.length ? [g.nama, ...bagian].join(" – ") : g.nama);
@@ -511,26 +646,7 @@ async function bagikan(id) {
 }
 let _jp = null;
 function jadwalProses() { if (!_jp) _jp = setTimeout(() => { _jp = null; gambarProses(); }, 400); }
-function gambarProses() {
-  if (MODE !== "ekspor" || !$("#exProses")) return;
-  const pr = GRUP.filter(g => g.status !== "siap");
-  const izin = TUNGGU_IZIN ? `<div class="pesan warn" style="margin-top:0">Sesi Google habis, export dijeda. <button class="kecil utama" onclick="masukGoogle(false)">Sambung Google lagi</button></div>` : "";
-  $("#exProses").innerHTML = izin + (pr.length ? pr.map(g => {
-    const pct = g.total ? (g.ok + g.gagal) / g.total * 100 : 0;
-    const chip = g.status === "jalan" ? (g.ulang ? `<span class="chip ulang">Masalah, diulang</span>` : `<span class="chip jalan">Memproses</span>`)
-      : g.gagal ? `<span class="chip gagal">Selesai, ${g.gagal} gagal</span>` : `<span class="chip ok">Selesai ✓</span>`;
-    return `<div class="prow"><div class="atas"><b>${esc(g.nama)}</b>${chip}<span style="font-size:12px;color:var(--mute)">${g.ok}/${g.total}</span></div>
-      <div class="kemajuan"><b style="width:${pct}%;${g.gagal || g.ulang ? "background:var(--warn)" : ""}"></b></div>
-      ${g.galat && (g.gagal || g.ulang) ? `<div style="font-size:12px;color:var(--bad)">${esc(g.galat)}</div>` : ""}
-      <div class="tb">
-        ${g.link.drive ? `<a class="kecil" href="https://drive.google.com/drive/folders/${g.link.drive}" target="_blank" rel="noopener">📁 Buka Drive</a>
-          <button class="kecil" onclick="bagikan(${g.id})">🔗 ${g.link.share ? "Salin link lagi" : "Bagikan link"}</button>` : ""}
-        ${g.link.photos ? `<a class="kecil" href="${esc(g.link.photos)}" target="_blank" rel="noopener">🖼 Buka album</a>` : ""}
-        ${g.link.zip ? `<a class="kecil" href="${g.link.zip}" download="${esc(g.nama)}.zip">⬇ Unduh ZIP lagi</a>` : ""}
-        ${g.status === "selesai" && g.gagalTugas.length ? `<button class="kecil" onclick="ulangGagal(${g.id})">Ulangi yang gagal</button>` : ""}
-        ${g.status === "selesai" ? `<button class="kecil hapus" onclick="buangGrup(${g.id});gambarProses()">✕</button>` : ""}</div></div>`;
-  }).join("") : `<div style="color:var(--mute);font-size:13px">Belum ada export.</div>`);
-}
+function gambarProses() { gambarFolder(); gambarBar(); }
 
 /* ---------------- halaman pustaka & bantuan ---------------- */
 function gambarPustaka() {
@@ -574,4 +690,6 @@ function gambarBantuan() {
   }
   try { await muatPustaka(); } catch (e) {}
   gambarLonceng(); gambarAkun(); halaman("ekspor");
+  // seret file ke luar kotak Foto jangan sampai membuka file di tab
+  ["dragover", "drop"].forEach(e => window.addEventListener(e, ev => { if (!ev.defaultPrevented) ev.preventDefault(); }));
 })();
