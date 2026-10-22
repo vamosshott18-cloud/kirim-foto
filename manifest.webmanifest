@@ -1,0 +1,15 @@
+{
+  "name": "Kirim Foto",
+  "short_name": "Kirim Foto",
+  "description": "Olah foto (preset, watermark, ukuran) lalu kirim ke Google Drive, Google Photos, atau simpan ke perangkat.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0b2b2a",
+  "theme_color": "#0b2b2a",
+  "icons": [
+    {"src": "ikon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "ikon-512.png", "sizes": "512x512", "type": "image/png"},
+    {"src": "ikon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"}
+  ]
+}
