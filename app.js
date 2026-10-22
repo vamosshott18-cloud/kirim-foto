@@ -174,7 +174,8 @@ function toast(t) { const el = $("#toast"); el.textContent = t; el.style.opacity
 async function gambarAkun() {
   const el = $("#akun");
   if (!KIRIM_CONFIG.clientId) { el.innerHTML = `<span>Google belum disiapkan</span>`; return; }
-  if (!Google.aktif()) { el.innerHTML = `<span>Google</span><button onclick="masukGoogle()">Masuk</button>`; return; }
+  if (!Google.aktif()) { const e = Google.ingatAkun();
+    el.innerHTML = `<span>${e ? esc(e) : "Google"}</span><button onclick="masukGoogle(${e ? "false" : "true"})">${e ? "Sambung" : "Masuk"}</button>`; return; }
   let a = null; try { a = await Google.infoAkun(); } catch (e) {}
   el.innerHTML = `<span title="${esc(a?.email || "")}">${esc(a?.email || "Terhubung")}</span>${Google.bisaPhotos() ? "<span title='Google Photos diizinkan'>🖼✓</span>" : ""}
     <button class="polos kecil" onclick="Google.keluar();gambarAkun();gambarTombol()">Keluar</button>`;
@@ -565,6 +566,10 @@ function gambarBantuan() {
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
   const balik = Google.tangkapRedirect();
   if (balik === "ok") setTimeout(() => toast("Terhubung ke Google ✓"), 300); else if (balik) setTimeout(() => alert(balik), 300);
+  // login otomatis: akun terakhir diingat → minta token baru diam-diam (tanpa layar Google), sekali per pembukaan
+  if (!balik && KIRIM_CONFIG.clientId && Google.ingatAkun() && !Google.aktif() && navigator.onLine && !sessionStorage.getItem("kf_auto")) {
+    sessionStorage.setItem("kf_auto", "1"); Google.masukRedirect(false, true); return;
+  }
   try { await muatPustaka(); } catch (e) {}
   gambarLonceng(); gambarAkun(); halaman("ekspor");
 })();

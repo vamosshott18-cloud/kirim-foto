@@ -11,7 +11,7 @@ const Google = (() => {
   const PH = "https://photoslibrary.googleapis.com/v1";
   let token = null, habis = 0, izin = new Set(), klien = null, gis = null, akun = null;
   try {   // sesi tersimpan (1 jam) supaya reload halaman tidak perlu login lagi
-    const t = JSON.parse(sessionStorage.getItem("kf_token") || "null");
+    const t = JSON.parse(localStorage.getItem("kf_token") || "null");
     if (t && t.habis > Date.now() + 60000) { token = t.token; habis = t.habis; izin = new Set(t.izin); }
   } catch (e) {}
 
@@ -24,16 +24,18 @@ const Google = (() => {
   }
   function simpanToken(t, detik, scope) {
     token = t; habis = Date.now() + (detik - 60) * 1000; izin = new Set((scope || "").split(" "));
-    sessionStorage.setItem("kf_token", JSON.stringify({ token, habis, izin: [...izin] })); akun = null;
+    localStorage.setItem("kf_token", JSON.stringify({ token, habis, izin: [...izin] })); akun = null;
   }
   // login dengan pindah halaman (untuk aplikasi di layar utama iPhone / bila popup diblokir)
-  function masukRedirect(pilihAkun = false) {
+  function masukRedirect(pilihAkun = false, diam = false) {
     const state = Math.random().toString(36).slice(2);
-    sessionStorage.setItem("kf_state", state);
+    sessionStorage.setItem("kf_state", state); sessionStorage.setItem("kf_diam", diam ? "1" : "");
+    const email = localStorage.getItem("kf_email");
     const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
     u.search = new URLSearchParams({ client_id: KIRIM_CONFIG.clientId, redirect_uri: location.origin + location.pathname.replace(/index\.html$/, ""),
       response_type: "token", scope: SCOPES.join(" "), include_granted_scopes: "true", state,
-      ...(pilihAkun ? { prompt: "select_account consent" } : {}) });
+      ...(pilihAkun ? { prompt: "select_account consent" } : diam ? { prompt: "none" } : {}),
+      ...(email && !pilihAkun ? { login_hint: email } : {}) });
     location.assign(u.toString());
     return new Promise(() => {});
   }
@@ -43,6 +45,7 @@ const Google = (() => {
     const p = new URLSearchParams(location.hash.slice(1));
     history.replaceState(null, "", location.pathname + location.search);
     if (p.get("state") !== sessionStorage.getItem("kf_state")) return "Login Google tidak valid, coba lagi";
+    if (p.get("error") && sessionStorage.getItem("kf_diam")) return null;   // login otomatis tidak bisa → tampilkan tombol Masuk saja
     if (p.get("error")) return p.get("error") === "access_denied" ? "Login Google dibatalkan" : "Login Google gagal: " + p.get("error");
     simpanToken(p.get("access_token"), +p.get("expires_in") || 3599, p.get("scope"));
     return "ok";
@@ -64,12 +67,13 @@ const Google = (() => {
           gagal(new Error(e.type === "popup_closed" ? "Login Google dibatalkan" : (e.message || "Login Google gagal")));
         },
       });
-      klien.requestAccessToken({ prompt: pilihAkun ? "select_account consent" : "" });
+      const email = localStorage.getItem("kf_email");
+      klien.requestAccessToken({ prompt: pilihAkun ? "select_account consent" : "", ...(email && !pilihAkun ? { login_hint: email } : {}) });
     });
   }
   function keluar() {
     if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token, () => {});
-    token = null; habis = 0; izin = new Set(); akun = null; sessionStorage.removeItem("kf_token");
+    token = null; habis = 0; izin = new Set(); akun = null; localStorage.removeItem("kf_token"); localStorage.removeItem("kf_email");
   }
   const aktif = () => !!token && Date.now() < habis;
   const bisaDrive = () => aktif() && izin.has(SCOPES[0]);
@@ -96,6 +100,7 @@ const Google = (() => {
     if (akun || !bisaDrive()) return akun;
     const j = await (await req(`${API}/about?fields=user(emailAddress,displayName),storageQuota`)).json();
     akun = { email: j.user.emailAddress, pakai: +j.storageQuota.usage || 0, batas: +j.storageQuota.limit || 0 };
+    localStorage.setItem("kf_email", akun.email);   // diingat untuk login otomatis berikutnya
     return akun;
   }
 
@@ -180,7 +185,8 @@ const Google = (() => {
     return h.mediaItem.id;
   }
 
-  return { masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
+  const ingatAkun = () => localStorage.getItem("kf_email");
+  return { ingatAkun, masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
 })();
 
 /* ---- Folder di perangkat: tulis langsung (Chrome/Edge di komputer) atau ZIP (lainnya) ---- */
