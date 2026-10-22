@@ -1,5 +1,5 @@
 // Service worker: simpan aplikasi supaya cepat dibuka & bisa dipasang ke layar utama. Selalu coba versi terbaru dulu.
-const CACHE = "kirimfoto-v7";
+const CACHE = "kirimfoto-v8";
 const FILE = ["./", "index.html", "app.js", "engine.js", "lrpreset.js", "tujuan.js", "config.js", "manifest.webmanifest", "ikon-192.png", "ikon-512.png"];
 self.addEventListener("install", e => { e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILE))); self.skipWaiting(); });
 self.addEventListener("activate", e => { e.waitUntil(caches.keys().then(k => Promise.all(k.filter(x => x !== CACHE).map(x => caches.delete(x))))); self.clients.claim(); });

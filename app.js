@@ -470,11 +470,13 @@ function gambarBar() {
   const p = terpilih(), nf = p.reduce((s, g) => s + g.file.length, 0), jalan = GRUP.filter(g => g.status === "jalan");
   const f = ATUR.drive_folder, ke = ATUR.tujuan.map(k => k === "drive" && f ? `Drive › ${f.nama}` : NAMA_TJ()[k]).join(" + ");
   let atas, bawah;
-  if (JALAN) { const ok = jalan.reduce((s, g) => s + g.ok + g.gagal, 0), tot = jalan.reduce((s, g) => s + g.total, 0); atas = `Sedang export… ${ok}/${tot} file`; bawah = MOBILE ? "Biarkan layar menyala & aplikasi terbuka" : "Foto asli tidak diubah"; }
+  const ok = jalan.reduce((s, g) => s + g.ok + g.gagal, 0), tot = jalan.reduce((s, g) => s + g.total, 0);
+  if (JALAN && p.length) { atas = `${p.length} folder · ${nf} file`; bawah = `→ ${ke} · ikut antre (sedang export ${ok}/${tot})`; }
+  else if (JALAN) { atas = `Sedang export… ${ok}/${tot} file`; bawah = MOBILE ? "Biarkan layar menyala & aplikasi terbuka · boleh tambah folder lain" : "Boleh tambah folder lain, nanti ikut antre"; }
   else if (!GRUP.some(g => g.status === "siap")) { atas = "Belum ada foto"; bawah = `Tujuan: ${ke}`; }
   else { atas = `${p.length} folder · ${nf} file`; bawah = `→ ${ke}`; }
   $("#exBar").innerHTML = `<div class="rg"><b>${esc(atas)}</b><span>${esc(bawah)}</span></div>
-    <button class="utama" onclick="mulaiEkspor()" ${!p.length || JALAN ? "disabled" : ""}>📤 Export</button>`;
+    <button class="utama" onclick="mulaiEkspor()" ${!p.length ? "disabled" : ""}>${JALAN ? "➕ Export juga" : "📤 Export"}</button>`;
 }
 let UBAH_DF = false;
 function blokFolderDrive() {
@@ -560,7 +562,7 @@ const tidur = ms => new Promise(r => setTimeout(r, ms));
 async function tungguOnline() { while (!navigator.onLine) await tidur(2000); }
 
 async function mulaiEkspor() {
-  const p = terpilih(); if (!p.length || JALAN) return;
+  const p = terpilih(); if (!p.length) return;                  // boleh ditekan lagi saat export berjalan → ikut antre
   const tj = [...ATUR.tujuan];
   if ((tj.includes("drive") || tj.includes("photos")) && !Google.aktif()) return masukGoogle();      // klik ini dipakai untuk login dulu
   if (tj.includes("photos") && !Google.bisaPhotos()) return masukGoogle(true);
@@ -569,24 +571,31 @@ async function mulaiEkspor() {
     return;
   }
   if ("Notification" in window && Notification.permission === "default") try { Notification.requestPermission(); } catch (e) {}
-  const a = salin(ATUR), as = await muatAset(a);
-  JALAN = true; kunciLayar();
+  const a = salin(ATUR), as = await muatAset(a), tambahan = JALAN;   // tiap folder memakai pengaturan saat Export-nya ditekan
   const tugas = [];
   for (const [i, g] of p.entries()) {
     g.namaTujuan = namaFolderTujuan(g.nama, i + 1, a);
     g.file.sort((x, y) => urutAlami((x.rel || "") + "/" + x.f.name, (y.rel || "") + "/" + y.f.name));
     Object.assign(g, { status: "jalan", ok: 0, gagal: 0, total: g.file.length, galat: "", link: {}, gagalTugas: [], tujuan: tj, mulai: Date.now() });
-    g.file.forEach((item, i) => tugas.push({ g, item, x: i + 1 }));
+    g.file.forEach((item, i) => tugas.push({ g, item, x: i + 1, a, as }));
   }
-  kabari("info", `📤 Export dimulai: ${p.length} folder`, `${tugas.length} file diproses di perangkat ini`);
+  kabari("info", tambahan ? `➕ Masuk antrean: ${p.length} folder` : `📤 Export dimulai: ${p.length} folder`,
+    `${tugas.length} file ${tambahan ? "diproses setelah / bersamaan dengan export yang sedang jalan" : "diproses di perangkat ini"}`);
   gambarFolder(); gambarTombol(); gambarProses();
-  await jalankan(tugas, a, as);
+  await jalankan(tugas);
 }
-async function jalankan(tugas, a, as) {
-  JALAN = true; gambarTombol();
-  let i = 0;
-  const PAR = Mesin.IOS ? 1 : 2;
-  await Promise.all(Array.from({ length: PAR }, async () => { while (i < tugas.length) await kerjakan(tugas[i++], a, as); }));
+// antrean bersama: export baru tinggal ditambahkan, pekerja yang sedang jalan ikut mengambilnya
+const ANTRE = []; let PEKERJA = 0;
+async function jalankan(tugas) {
+  ANTRE.push(...tugas);
+  JALAN = true; kunciLayar(); gambarTombol();
+  const baru = Math.max(0, (Mesin.IOS ? 1 : 2) - PEKERJA);
+  if (!baru) return;
+  PEKERJA += baru;
+  await Promise.all(Array.from({ length: baru }, async () => { while (ANTRE.length) await kerjakan(ANTRE.shift()); }));
+  PEKERJA -= baru;
+  if (ANTRE.length) return jalankan([]);
+  if (PEKERJA) return;                                             // pekerja lain masih menyelesaikan file terakhirnya
   JALAN = false;
   try { KUNCI_LAYAR?.release(); } catch (e) {}
   const selesai = GRUP.filter(g => g.status === "selesai" && g.baruSelesai);
@@ -597,8 +606,8 @@ async function jalankan(tugas, a, as) {
   selesai.forEach(g => g.baruSelesai = false);
   gambarTombol(); gambarProses();
 }
-async function kerjakan(t, a, as) {
-  const { g, item, x } = t, f = item.f, video = VIDEO.test(f.name);
+async function kerjakan(t) {
+  const { g, item, x, a, as } = t, f = item.f, video = VIDEO.test(f.name);
   try {
     let blob = f, mime = f.type || (video ? "video/mp4" : "image/jpeg"), ext = (f.name.match(/\.[^.]+$/) || [".jpg"])[0].toLowerCase();
     if (!video && Mesin.perluOlah(a, f)) {
@@ -647,12 +656,11 @@ async function folderSelesai(g) {
   kabari(g.gagal ? "masalah" : "ok", `${g.gagal ? "⚠️" : "✅"} ${namaTj(g)} selesai`, `${g.ok} file masuk ${ke}${g.gagal ? `, ${g.gagal} gagal` : ""}`);
 }
 async function ulangGagal(id) {
-  const g = GRUP.find(x => x.id === id); if (!g || JALAN || !g.gagalTugas.length) return;
+  const g = GRUP.find(x => x.id === id); if (!g || !g.gagalTugas.length) return;
   if ((g.tujuan.includes("drive") || g.tujuan.includes("photos")) && !Google.aktif()) return masukGoogle();
-  const tugas = g.gagalTugas; g.gagalTugas = []; g.gagal = 0; g.status = "jalan"; g.galat = "";
-  const a = salin(ATUR), as = await muatAset(a);
-  kunciLayar(); gambarProses();
-  await jalankan(tugas, a, as);
+  const tugas = g.gagalTugas; g.gagalTugas = []; g.gagal = 0; g.status = "jalan"; g.galat = "";   // diulang dengan pengaturan aslinya
+  gambarProses();
+  await jalankan(tugas);
 }
 async function bagikan(id) {
   const g = GRUP.find(x => x.id === id);
