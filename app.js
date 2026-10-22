@@ -181,7 +181,7 @@ async function gambarAkun() {
     <button class="polos kecil" onclick="Google.keluar();gambarAkun();gambarTombol()">Keluar</button>`;
 }
 async function masukGoogle(pilih = true) {
-  if (Google.STANDALONE && GRUP.some(g => g.status === "siap" || g.status === "jalan") &&
+  if ((Google.STANDALONE || Google.LAYANAN) && GRUP.some(g => g.status === "siap" || g.status === "jalan") &&
       !confirm("Login Google akan memuat ulang halaman, foto yang sudah dipilih perlu dipilih lagi. Lanjut?")) return;
   try { await Google.masuk(pilih); toast("Terhubung ke Google ✓"); } catch (e) { alert(e.message); }
   gambarAkun(); gambarTombol(); if (TUNGGU_IZIN) lanjutSetelahIzin();
@@ -558,16 +558,18 @@ function gambarBantuan() {
   <div class="blok" style="font-size:14px;line-height:1.6"><b>Penting saat export di HP</b><br>
     Biarkan aplikasi terbuka & layar menyala sampai selesai (layar dijaga menyala otomatis bila didukung). Kalau aplikasi ditutup, export berhenti — tekan Export lagi untuk folder yang belum selesai.<br>
     iPhone/iPad: hasil maksimal ±16 MP per foto (batas Safari).</div>
-  <div class="blok" style="font-size:13px;color:var(--mute);line-height:1.6"><b>Privasi</b>: foto diolah di perangkat kamu dan langsung dikirim ke akun Google kamu sendiri. Tidak ada server lain. Preset, logo & pengaturan tersimpan di browser perangkat ini.</div>`;
+  <div class="blok" style="font-size:13px;color:var(--mute);line-height:1.6"><b>Privasi</b>: foto diolah di perangkat kamu dan langsung dikirim ke akun Google kamu sendiri. Tidak ada server lain. Preset, logo & pengaturan tersimpan di browser perangkat ini. <a href="privasi.html">Kebijakan privasi</a></div>`;
 }
 
 /* ---------------- mulai ---------------- */
 (async () => {
   if ("serviceWorker" in navigator && location.protocol === "https:") navigator.serviceWorker.register("sw.js").catch(() => {});
-  const balik = Google.tangkapRedirect();
+  const balik = await Google.tangkapRedirect();
   if (balik === "ok") setTimeout(() => toast("Terhubung ke Google ✓"), 300); else if (balik) setTimeout(() => alert(balik), 300);
-  // login otomatis: akun terakhir diingat → minta token baru diam-diam (tanpa layar Google), sekali per pembukaan
-  if (!balik && KIRIM_CONFIG.clientId && Google.ingatAkun() && !Google.aktif() && navigator.onLine && !sessionStorage.getItem("kf_auto")) {
+  // login cukup sekali: perpanjang izin diam-diam lewat server izin
+  if (!Google.aktif() && Google.punyaSesi()) { try { await Google.segar(); } catch (e) {} }
+  // cadangan (tanpa server izin): minta token baru diam-diam lewat Google, sekali per pembukaan
+  else if (!balik && !Google.LAYANAN && KIRIM_CONFIG.clientId && Google.ingatAkun() && !Google.aktif() && navigator.onLine && !sessionStorage.getItem("kf_auto")) {
     sessionStorage.setItem("kf_auto", "1"); Google.masukRedirect(false, true); return;
   }
   try { await muatPustaka(); } catch (e) {}

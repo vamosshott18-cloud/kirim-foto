@@ -9,7 +9,9 @@ const Google = (() => {
                   "https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata"];
   const API = "https://www.googleapis.com/drive/v3", UP = "https://www.googleapis.com/upload/drive/v3";
   const PH = "https://photoslibrary.googleapis.com/v1";
-  let token = null, habis = 0, izin = new Set(), klien = null, gis = null, akun = null;
+  let token = null, habis = 0, izin = new Set(), klien = null, gis = null, akun = null, segarJalan = null;
+  const LAYANAN = (window.KIRIM_CONFIG || {}).layanan || "";      // server izin (Apps Script) → login cukup sekali
+  const sesi = () => localStorage.getItem("kf_sesi");
   try {   // sesi tersimpan (1 jam) supaya reload halaman tidak perlu login lagi
     const t = JSON.parse(localStorage.getItem("kf_token") || "null");
     if (t && t.habis > Date.now() + 60000) { token = t.token; habis = t.habis; izin = new Set(t.izin); }
@@ -40,7 +42,18 @@ const Google = (() => {
     return new Promise(() => {});
   }
   // dipanggil saat halaman dibuka: ambil token dari alamat setelah kembali dari Google
-  function tangkapRedirect() {
+  async function tangkapRedirect() {
+    const q = new URLSearchParams(location.search);
+    if (q.get("code") || (q.get("error") && q.get("state"))) {         // kembali dari login kode
+      history.replaceState(null, "", location.pathname);
+      if (q.get("state") !== sessionStorage.getItem("kf_state")) return "Login Google tidak valid, coba lagi";
+      if (q.get("error")) return q.get("error") === "access_denied" ? "Login Google dibatalkan" : "Login Google gagal: " + q.get("error");
+      const j = await layanan({ aksi: "tukar", code: q.get("code"), redirect_uri: alamatBalik(), verifier: sessionStorage.getItem("kf_ver") });
+      if (j.galat) return "Login Google gagal: " + j.galat;
+      simpanToken(j.access_token, j.expires_in, j.scope);
+      if (j.sesi) localStorage.setItem("kf_sesi", j.sesi);
+      return "ok";
+    }
     if (!location.hash.includes("access_token") && !location.hash.includes("error=")) return null;
     const p = new URLSearchParams(location.hash.slice(1));
     history.replaceState(null, "", location.pathname + location.search);
@@ -51,8 +64,53 @@ const Google = (() => {
     return "ok";
   }
   const STANDALONE = matchMedia("(display-mode: standalone)").matches || navigator.standalone === true;
+  const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  const alamatBalik = () => location.origin + location.pathname.replace(/index\.html$/, "");
+  // login dengan kode + PKCE → server menukar & menyimpan izin jangka panjang
+  async function masukKode(pilihAkun = false) {
+    const verifier = b64url(crypto.getRandomValues(new Uint8Array(32)));
+    const challenge = b64url(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier)));
+    const state = Math.random().toString(36).slice(2);
+    sessionStorage.setItem("kf_state", state); sessionStorage.setItem("kf_ver", verifier);
+    const email = localStorage.getItem("kf_email");
+    const u = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+    u.search = new URLSearchParams({ client_id: KIRIM_CONFIG.clientId, redirect_uri: alamatBalik(), response_type: "code",
+      scope: SCOPES.join(" "), include_granted_scopes: "true", access_type: "offline", state,
+      code_challenge: challenge, code_challenge_method: "S256",
+      prompt: pilihAkun ? "select_account consent" : "consent", ...(email && !pilihAkun ? { login_hint: email } : {}) });
+    location.assign(u.toString());
+    return new Promise(() => {});
+  }
+  async function layanan(isi) {
+    let galat = null;
+    for (let coba = 0; coba < 4; coba++) {                   // Apps Script kadang 404/5xx sesaat (baru "bangun") → ulangi
+      if (coba) await new Promise(t => setTimeout(t, 1200 * coba));
+      try {
+        const r = await fetch(LAYANAN, { method: "POST", body: JSON.stringify(isi) });   // tanpa header khusus → tanpa preflight
+        if (r.ok) return await r.json();
+        galat = new GalatSementara(`Layanan login sibuk (${r.status})`);
+      } catch (e) { galat = new GalatSementara("Koneksi internet putus"); }
+    }
+    throw galat;
+  }
+  // perpanjang izin akses diam-diam (tiap ±1 jam) — tanpa layar Google
+  function segar() {
+    if (!sesi()) return Promise.reject(new GalatIzin("Belum login"));
+    segarJalan = segarJalan || (async () => {
+      try {
+        const j = await layanan({ aksi: "segar", sesi: sesi() });
+        if (j.galat) {
+          if (["sesi_hilang", "invalid_grant"].includes(j.galat)) { localStorage.removeItem("kf_sesi"); throw new GalatIzin("Izin Google dicabut / kedaluwarsa, login lagi"); }
+          throw new GalatSementara("Gagal memperpanjang izin: " + j.galat);
+        }
+        simpanToken(j.access_token, j.expires_in, j.scope);
+      } finally { segarJalan = null; }
+    })();
+    return segarJalan;
+  }
   // HARUS dipanggil dari klik pengguna. Popup Google; di aplikasi layar utama / bila popup gagal → pindah halaman.
   async function masuk(pilihAkun = false) {
+    if (LAYANAN) return masukKode(pilihAkun);
     if (STANDALONE) return masukRedirect(pilihAkun);
     try { await muatGIS(); } catch (e) { return masukRedirect(pilihAkun); }
     return new Promise((ok, gagal) => {
@@ -72,6 +130,8 @@ const Google = (() => {
     });
   }
   function keluar() {
+    if (sesi() && LAYANAN) layanan({ aksi: "keluar", sesi: sesi() }).catch(() => {});
+    localStorage.removeItem("kf_sesi");
     if (token && window.google?.accounts?.oauth2) google.accounts.oauth2.revoke(token, () => {});
     token = null; habis = 0; izin = new Set(); akun = null; localStorage.removeItem("kf_token"); localStorage.removeItem("kf_email");
   }
@@ -79,12 +139,16 @@ const Google = (() => {
   const bisaDrive = () => aktif() && izin.has(SCOPES[0]);
   const bisaPhotos = () => aktif() && izin.has(SCOPES[1]);
 
-  async function req(url, opt = {}) {
-    if (!aktif()) throw new GalatIzin("Sesi Google habis");
+  async function req(url, opt = {}, ulang = true) {
+    if (!aktif()) { if (sesi()) await segar(); else throw new GalatIzin("Sesi Google habis"); }
     let r;
     try { r = await fetch(url, { ...opt, headers: { Authorization: "Bearer " + token, ...(opt.headers || {}) } }); }
     catch (e) { throw new GalatSementara("Koneksi internet putus"); }
-    if (r.status === 401) { token = null; throw new GalatIzin("Sesi Google habis"); }
+    if (r.status === 401) {
+      token = null; habis = 0;
+      if (sesi() && ulang && !(opt.body instanceof ReadableStream)) { await segar(); return req(url, opt, false); }
+      throw new GalatIzin("Sesi Google habis");
+    }
     if (r.status === 429 || r.status >= 500) throw new GalatSementara(`Google sedang sibuk (${r.status})`);
     if (r.status === 403) {
       const t = await r.text();
@@ -186,7 +250,7 @@ const Google = (() => {
   }
 
   const ingatAkun = () => localStorage.getItem("kf_email");
-  return { ingatAkun, masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
+  return { segar, punyaSesi: () => !!(LAYANAN && sesi()), LAYANAN, ingatAkun, masuk, masukRedirect, tangkapRedirect, STANDALONE, keluar, aktif, bisaDrive, bisaPhotos, infoAkun, jalurDrive, unggahDrive, bagikanDrive, album, unggahPhotos };
 })();
 
 /* ---- Folder di perangkat: tulis langsung (Chrome/Edge di komputer) atau ZIP (lainnya) ---- */
