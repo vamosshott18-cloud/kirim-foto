@@ -1,4 +1,4 @@
-// Mesin olah foto di browser: buka (termasuk HEIC) → ubah ukuran → preset (LUT, GPU) → watermark → teks custom
+// Mesin olah foto di browser: buka (termasuk HEIC) → ubah ukuran → preset (LUT, GPU) / edit ala Lightroom (lrolah.js) → watermark → teks custom
 // → JPEG (mutu / target MB) → salin EXIF (tanggal jepret dll.). Semua terjadi di perangkat, foto tidak dikirim ke server lain.
 "use strict";
 const Mesin = (() => {
@@ -325,7 +325,14 @@ const Mesin = (() => {
     if (pratinjauSisi) { const s = Math.min(1, pratinjauSisi / Math.max(tw, th)); tw = Math.max(1, Math.round(tw * s)); th = Math.max(1, Math.round(th * s)); }
     const c = gambarUlang(img, W, H, tw, th, isi);
     img.src = "";
-    if (aset.lut && a.lut.kekuatan > 0) terapkanLUT(c, aset.lut, a.lut.kekuatan / 100);
+    const kuat = a.lut.file ? a.lut.kekuatan / 100 : 1;          // preset .cube (LUT) dan/atau edit ala Lightroom (LRO)
+    if (kuat > 0 && (aset.lut || aset.lr)) {
+      let asli = null;
+      if (kuat < 1) { asli = kanvas(c.width, c.height); asli.getContext("2d").drawImage(c, 0, 0); }
+      if (aset.lut) terapkanLUT(c, aset.lut, 1);
+      if (aset.lr) terapkanLUT(c, LRO.olah(c, aset.lr, c.width / W), 1);
+      if (asli) { const x = asli.getContext("2d"); x.globalAlpha = kuat; x.drawImage(c, 0, 0); c.getContext("2d").drawImage(asli, 0, 0); asli.width = 0; }
+    }
     const tgl = ex.tanggal || new Date(file.lastModified || Date.now());
     const dua = n => String(n).padStart(2, "0");
     const tanggal = `${dua(tgl.getDate())}/${dua(tgl.getMonth() + 1)}/${tgl.getFullYear()}`, jam = `${dua(tgl.getHours())}:${dua(tgl.getMinutes())}`;
@@ -343,7 +350,7 @@ const Mesin = (() => {
 
   // perlu diolah? (kalau tidak, file asli dikirim apa adanya)
   function perluOlah(a, file) {
-    if (a.wm.aktif || a.lut.file || a.ukuran !== "asli" || (a.label && a.label.aktif)) return true;
+    if (a.wm.aktif || a.lut.file || a.ukuran !== "asli" || (a.label && a.label.aktif) || Object.keys((a.edit || {}).ubah || {}).length) return true;
     if (a.kompres === "asli") return false;
     if (a.kompres === "mb" && /jpe?g$/i.test(file.type)) return file.size > a.mb * 1048576;
     return true;

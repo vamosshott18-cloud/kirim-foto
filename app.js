@@ -16,6 +16,7 @@ const BAWAAN = {
   wm: { aktif: false, teks: "", logo: "", posisi: "kanan-bawah", ukuran: 20, opasitas: 70, nama_file: false, jam: false, isi: "regang", logo_portrait: "" },
   label: { aktif: false, teks: "{nama_baru}", posisi: "kiri-bawah", ukuran: 3.5, warna: "#ffffff", opasitas: 90, latar: "bayangan", tebal: true },
   lut: { file: "", kekuatan: 100 },
+  edit: { ubah: {} },                             // slider ala Lightroom yang diubah dari nilai preset (.xmp) / dari nol
   nama: { mode: "asli", teks: "", urutan: false, format: "(x of y)" },
 };
 const salin = o => JSON.parse(JSON.stringify(o));
@@ -52,12 +53,16 @@ async function aset(id) {                        // LUT atau gambar logo dari pu
   const x = [...P.preset, ...P.watermark].find(i => i.id === id);
   if (!x) return null;
   let v;
-  if (x.jenis === "preset") v = x.ext === "cube" ? LR.bacaCube(x.data) : LR.keLUT(LR.baca(x.data));
+  if (x.jenis === "preset") v = x.ext === "cube" ? LR.bacaCube(x.data) : { xmp: true, nilai: LRO.dariTeks(x.data) };
   else { v = new Image(); v.src = URL.createObjectURL(x.data); await v.decode(); }
   CACHE.set(id, v); return v;
 }
-const muatAset = async a => ({ lut: a.lut.file ? await aset(a.lut.file) : null, logo: a.wm.aktif ? await aset(a.wm.logo) : null,
-                               logoPortrait: a.wm.aktif && a.wm.posisi === "penuh" ? await aset(a.wm.logo_portrait) : null });
+async function muatAset(a) {
+  const p = a.lut.file ? await aset(a.lut.file) : null, ubah = (a.edit || {}).ubah || {};
+  const lr = p && p.xmp ? { ...p.nilai, ...ubah } : Object.keys(ubah).length ? { ...LRO.bawaan(), ...ubah } : null;
+  return { lut: p && !p.xmp ? p : null, lr, logo: a.wm.aktif ? await aset(a.wm.logo) : null,
+           logoPortrait: a.wm.aktif && a.wm.posisi === "penuh" ? await aset(a.wm.logo_portrait) : null };
+}
 function pilihBerkas(id) {
   return new Promise(ok => { const i = $(id); i.value = ""; i.onchange = () => ok([...i.files]); i.click(); });
 }
@@ -73,7 +78,11 @@ async function tambahPustaka(jenis) {
       const stem = f.name.replace(/\.[^.]+$/, ""), id = "p" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
       if (jenis === "preset") {
         if (/\.cube$/i.test(f.name)) { const t = await f.text(); LR.bacaCube(t); await DB.simpan({ id, jenis, nama: stem, ext: "cube", data: t, t: Date.now() }); }
-        else { const t = LR.xmpDari(await f.arrayBuffer()); LR.baca(t); await DB.simpan({ id, jenis, nama: stem, ext: "xmp", data: t, t: Date.now() }); }
+        else {   // .xmp / DNG preset / foto JPG hasil export Lightroom (pengaturan slider-nya diambil)
+          let t; try { t = LR.xmpDari(await f.arrayBuffer()); LR.baca(t); }
+          catch (e) { throw new Error(/\.jpe?g$/i.test(f.name) ? "foto ini tidak membawa pengaturan Lightroom (export dengan Metadata: All)" : e.message); }
+          await DB.simpan({ id, jenis, nama: stem + (/\.jpe?g$/i.test(f.name) ? " (dari foto Lightroom)" : ""), ext: "xmp", data: t, t: Date.now() });
+        }
       } else {
         const img = await Mesin.bukaGambar(f);
         let w = img.naturalWidth, h = img.naturalHeight; const s = Math.min(1, 6000 / Math.max(w, h)); w = Math.round(w * s); h = Math.round(h * s);
@@ -291,7 +300,7 @@ function contohNama(x) {
 let BUKA = "";                                    // bagian "Atur hasil" yang sedang terbuka (satu saja)
 function bukaBagian(k) { BUKA = BUKA === k ? "" : k; gambarAtur(); }
 const namaPk = (jenis, id) => (P[jenis].find(x => x.id === id) || {}).nama;
-const BAGIAN = [["ukuran", "📐", "Ukuran"], ["kualitas", "🗜", "Kualitas"], ["nama", "🏷", "Nama file"], ["wm", "💧", "Watermark logo"], ["label", "🔤", "Teks di foto"], ["lut", "🎨", "Preset warna"]];
+const BAGIAN = [["ukuran", "📐", "Ukuran"], ["kualitas", "🗜", "Kualitas"], ["nama", "🏷", "Nama file"], ["wm", "💧", "Watermark logo"], ["label", "🔤", "Teks di foto"], ["lut", "🎨", "Preset warna"], ["edit", "🎛", "Edit ala Lightroom"]];
 function ringkasAtur() {
   const a = ATUR, w = a.wm, lb = a.label;
   const posWm = w.posisi === "penuh" ? "pas ukuran foto" : w.posisi === "ulang" ? "berulang miring" : (NPOS[w.posisi] || "").replace(/^\S+ /, "").toLowerCase();
@@ -302,6 +311,7 @@ function ringkasAtur() {
     wm: w.aktif ? `${namaPk("watermark", w.logo) || (w.teks ? "“" + w.teks + "”" : "Teks")} · ${posWm}` : "Mati",
     label: lb.aktif ? ((lb.teks || "").split("\n")[0] || "(kosong)") : "Mati",
     lut: a.lut.file ? `${namaPk("preset", a.lut.file) || "Preset"} · ${a.lut.kekuatan}%` : "Tanpa preset",
+    edit: (() => { const n = Object.keys((a.edit || {}).ubah || {}).length; return n ? `${n} slider diubah` : (lrPreset() ? "Sesuai preset" : "Belum diedit"); })(),
   };
 }
 const BULAN = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
@@ -386,8 +396,10 @@ function gambarAtur() {
       <div class="baris"><div class="pk-grid">
         <div class="pk kosong2 ${!a.lut.file ? "on" : ""}" onclick="set('lut.file','')"><div class="k"><b>Tanpa preset</b></div></div>
         ${P.preset.map(x => kartuPk(x, { pilih: `set('lut.file','${x.id}')`, aktif: a.lut.file === x.id, hapus: false })).join("")}
-        <div class="pk tambah" onclick="tambahPustaka('preset').then(id=>{ if(id) ATUR.lut.file=id; set('lut.kekuatan',ATUR.lut.kekuatan) })">＋ Tambah preset (.cube / .xmp / DNG)</div></div></div>
-      <div class="baris ${a.lut.file ? "" : "mati"}" style="margin-bottom:0"><span>Kekuatan: <b>${a.lut.kekuatan}%</b></span><input type="range" min="0" max="100" value="${a.lut.kekuatan}" onchange="set('lut.kekuatan',+this.value)"></div>`,
+        <div class="pk tambah" onclick="tambahPustaka('preset').then(id=>{ if(id) ATUR.lut.file=id; set('lut.kekuatan',ATUR.lut.kekuatan) })">＋ Tambah preset (.cube / .xmp / DNG / foto JPG Lightroom)</div></div></div>
+      <div class="baris ${a.lut.file ? "" : "mati"}" style="margin-bottom:0"><span>Kekuatan: <b>${a.lut.kekuatan}%</b></span><input type="range" min="0" max="100" value="${a.lut.kekuatan}" onchange="set('lut.kekuatan',+this.value)"></div>
+      <div class="ket" style="margin-top:8px">Preset Lightroom (.xmp / DNG / foto JPG hasil Lightroom) diolah lengkap & bisa diatur lagi di <b>🎛 Edit ala Lightroom</b>.</div>`,
+    edit: blokEdit,
   };
   const saklar = (k, on) => `<label class="saklar" onclick="event.stopPropagation()" title="Nyalakan / matikan"><input type="checkbox" ${on ? "checked" : ""} onchange="if(this.checked)BUKA='${k}';set('${k}.aktif',this.checked)"></label>`;
   $("#aturBlok").innerHTML = `<div class="judul">Atur hasil <small>berlaku untuk semua folder</small></div>
@@ -400,6 +412,50 @@ function gambarAtur() {
         ${buka ? `<div class="isi-bag">${isi[k]()}</div>` : ""}</div>`;
     }).join("")}</div>`;
   gambarProfil();
+}
+/* ---------------- Edit ala Lightroom ---------------- */
+const LRUI = { tab: "basic", hsl: "hue" }, LR_NILAI = new Map();
+const LR_HUE = { Red: "#e5484d", Orange: "#f08c2c", Yellow: "#e9c81f", Green: "#3fa34d", Aqua: "#20b2b0", Blue: "#3b6fe0", Purple: "#8b5cf6", Magenta: "#d63ba8" };
+const LR_GRAD = { IncrementalTemperature: "linear-gradient(90deg,#4d7bd6,#ddd,#e2b53a)", IncrementalTint: "linear-gradient(90deg,#3fae4f,#ddd,#c64fc0)" };
+const LR_GRUP = { basic: [["wb", "White Balance"], ["nada", "Tone"], ["presence", "Presence"]], detail: [["tajam", "Sharpening"], ["noise", "Noise Reduction"], ["efek", "Efek"]] };
+function lrPreset() {                                   // nilai preset .xmp terpilih (null kalau .cube / tanpa preset)
+  const x = P.preset.find(i => i.id === ATUR.lut.file);
+  if (!x || x.ext !== "xmp") return null;
+  if (!LR_NILAI.has(x.id)) { try { LR_NILAI.set(x.id, LRO.dariTeks(x.data)); } catch (e) { LR_NILAI.set(x.id, null); } }
+  return LR_NILAI.get(x.id);
+}
+const lrDasar = k => (lrPreset() || {})[k] ?? LRO.SLIDER[k].bawaan;
+const lrNilai = k => { const u = (ATUR.edit || {}).ubah || {}; return k in u ? u[k] : lrDasar(k); };
+function lrUbah() { ATUR.edit = ATUR.edit || { ubah: {} }; ATUR.edit.ubah = ATUR.edit.ubah || {}; return ATUR.edit.ubah; }
+function lrSegar() { simpanAtur(); gambarAtur(); gambarTombol(); pratinjau(); }
+function lrSet(k, v) { const u = lrUbah(); v = +v; if (Math.abs(v - lrDasar(k)) < 1e-9) delete u[k]; else u[k] = v; lrSegar(); }
+function lrReset(k) { const u = lrUbah(); if (k) delete u[k]; else ATUR.edit.ubah = {}; lrSegar(); }
+function lrBaris(k, label, titik) {
+  const m = LRO.SLIDER[k], v = lrNilai(k), ubah = k in ((ATUR.edit || {}).ubah || {});
+  const grad = LR_GRAD[k] || (titik ? `linear-gradient(90deg,#ddd,${titik})` : "");
+  const tampil = m.langkah < 1 ? (+v).toFixed(m.langkah < 0.1 ? 2 : 1) : Math.round(v);
+  return `<div class="lr-sl"><label class="${ubah ? "ubah" : ""}" title="Ketuk 2x = kembali ke nilai preset (${lrDasar(k)})" ondblclick="lrReset('${k}')">${titik ? `<span class="lr-titik" style="background:${titik}"></span>` : ""}${esc(label || m.label)}</label>
+    <input type="range" ${grad ? `class="lr-warna" style="--lr-grad:${grad}"` : ""} min="${m.min}" max="${m.maks}" step="${m.langkah}" value="${v}"
+      oninput="this.parentNode.querySelector('input[type=number]').value=this.value" onchange="lrSet('${k}',this.value)" ondblclick="lrReset('${k}')">
+    <input type="number" inputmode="decimal" min="${m.min}" max="${m.maks}" step="${m.langkah}" value="${tampil}" onchange="lrSet('${k}',this.value)"></div>`;
+}
+function blokEdit() {
+  const x = P.preset.find(i => i.id === ATUR.lut.file), xmp = !!lrPreset(), n = Object.keys(lrUbah()).length;
+  const asal = xmp ? `preset <b>${esc(x.nama)}</b>` : x ? `LUT <b>${esc(x.nama)}</b> + slider dari nol` : "foto asli (nol)";
+  let isiTab;
+  if (LRUI.tab === "hsl") {
+    const pre = { hue: "HueAdjustment", sat: "SaturationAdjustment", lum: "LuminanceAdjustment" }[LRUI.hsl];
+    isiTab = `<div class="pilihan" style="margin:4px 0 8px">${[["hue", "Hue"], ["sat", "Saturation"], ["lum", "Luminance"]].map(([k, t]) =>
+      `<button class="kecil ${LRUI.hsl === k ? "on" : ""}" onclick="LRUI.hsl='${k}';gambarAtur()">${t}</button>`).join("")}</div>` + LRO.WARNA8.map(w => lrBaris(pre + w, w, LR_HUE[w])).join("");
+  } else {
+    isiTab = LR_GRUP[LRUI.tab].map(([gr, t]) => `<div class="lr-grup">${t}</div>` + Object.keys(LRO.SLIDER).filter(k => LRO.SLIDER[k].grup === gr).map(k => lrBaris(k)).join("")).join("");
+  }
+  return `<div class="lr-kepala"><span>Mulai dari ${asal}${n ? ` · <b>${n} slider diubah</b>` : ""}</span>
+      ${n ? `<button class="kecil" style="margin-left:auto" onclick="lrReset()">↺ Reset ke preset</button>` : ""}</div>
+    <div class="pilihan">${[["basic", "Basic"], ["hsl", "HSL / Warna"], ["detail", "Detail"]].map(([k, t]) => `<button class="${LRUI.tab === k ? "on" : ""}" onclick="LRUI.tab='${k}';gambarAtur()">${t}</button>`).join("")}</div>
+    ${isiTab}
+    <div class="ket" style="margin-top:10px">Geser lalu lepas untuk melihat pratinjau. Ketuk 2x nama slider = kembali ke nilai preset.
+      ${xmp ? "Preset Lightroom diolah lengkap: warna, kontras lokal (Texture/Clarity), shadows/highlights, sharpening & noise reduction." : ""}</div>`;
 }
 function sisipKode(k) {
   const ta = $("#teksLabel"), t = ATUR.label.teks || "", a = ta ? ta.selectionStart : t.length, b = ta ? ta.selectionEnd : t.length;
